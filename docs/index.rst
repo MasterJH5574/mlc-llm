@@ -5,7 +5,7 @@
 
 🚧 This document is currently undergoing heavy construction.
 
-👉 👉 :doc:`Get started by try out the MLC Chat. </get_started/try_out>`
+👉 👉 :doc:`Get started by trying out the MLC Chat. </get_started/try_out>`
 
 Machine Learning Compilation for LLM (MLC LLM) is a universal deployment solution that enables LLMs to run efficiently on consumer devices, leveraging native hardware acceleration like GPUs.
 
@@ -119,10 +119,10 @@ If you are interested in using Machine Learning Compilation in practice, we high
    :caption: Compile Models
    :hidden:
 
-   tutorials/compilation/compile_models.rst
-   tutorials/compilation/distribute_compiled_models.rst
-   tutorials/compilation/configure_targets.rst
-   tutorials/compilation/configure_quantization.rst
+   compilation/compile_models.rst
+   compilation/distribute_compiled_models.rst
+   compilation/configure_targets.rst
+   compilation/configure_quantization.rst
 
 .. toctree::
    :maxdepth: 1
@@ -136,7 +136,7 @@ If you are interested in using Machine Learning Compilation in practice, we high
    :caption: Prebuilt Models
    :hidden:
 
-   tutorials/prebuilts/prebuilt_models.rst
+   prebuilt_models.rst
 
 .. toctree::
    :maxdepth: 1

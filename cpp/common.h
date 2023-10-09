@@ -72,11 +72,11 @@ MLC_LLM_DLL std::unique_ptr<Tokenizer> TokenizerFromPath(const std::string& _pat
 struct FunctionTable {
   static PackedFunc SessionFuncAsPackedFunc(Session sess, DRef sess_func, String name);
 
-  void Init(TVMArgValue reload_lib, Device device, int num_shards);
+  void Init(TVMArgValue reload_lib, Device device, int num_shards, bool use_paged_kv_cache = false);
 
   ObjectRef LoadParams(const std::string& model_path, Device device);
 
-  void _InitFunctions();
+  void _InitFunctions(bool use_paged_kv_cache);
 
   ObjectRef Empty(ShapeTuple shape, DataType dtype, Device device) const;
 
@@ -99,6 +99,7 @@ struct FunctionTable {
   PackedFunc create_kv_cache_func_;
   PackedFunc reset_kv_cache_func_;
   bool support_backtracking_kv_;
+  PackedFunc remove_from_kv_cache_func_;
   PackedFunc fkvcache_array_popn_;
 };
 

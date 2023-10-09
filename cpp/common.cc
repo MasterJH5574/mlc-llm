@@ -108,7 +108,8 @@ PackedFunc FunctionTable::SessionFuncAsPackedFunc(Session sess, DRef sess_func, 
   });
 }
 
-void FunctionTable::Init(TVMArgValue reload_lib, Device device, int num_shards) {
+void FunctionTable::Init(TVMArgValue reload_lib, Device device, int num_shards,
+                         bool use_paged_kv_cache) {
   Device null_device{DLDeviceType(0), 0};
   if (num_shards > 1) {
     String lib_path{nullptr};
@@ -156,7 +157,7 @@ void FunctionTable::Init(TVMArgValue reload_lib, Device device, int num_shards) 
     this->get_global_func = [this](const std::string& name) -> PackedFunc {
       return SessionFuncAsPackedFunc(sess, sess->GetGlobalFunc(name), name);
     };
-    this->_InitFunctions();
+    this->_InitFunctions(use_paged_kv_cache);
     {
       Module mod = this->disco_mod->DebugGetFromRemote(0);
       this->softmax_func_ = mod->GetFunction("softmax_with_temperature");
@@ -185,7 +186,7 @@ void FunctionTable::Init(TVMArgValue reload_lib, Device device, int num_shards) 
       CHECK(f != nullptr) << "ValueError: Cannot find function " << name;
       return *f;
     };
-    this->_InitFunctions();
+    this->_InitFunctions(use_paged_kv_cache);
   }
 }
 
@@ -219,7 +220,7 @@ ObjectRef FunctionTable::LoadParams(const std::string& model_path, Device device
   }
 }
 
-void FunctionTable::_InitFunctions() {
+void FunctionTable::_InitFunctions(bool use_paged_kv_cache) {
   this->prefill_func_ = mod_get_func("prefill");
   this->embed_func_ = mod_get_func("embed");
   this->prefill_with_embed_func_ = mod_get_func("prefill_with_embed");
@@ -227,14 +228,24 @@ void FunctionTable::_InitFunctions() {
   this->softmax_func_ = mod_get_func("softmax_with_temperature");
   this->encoding_without_cache_func_ = mod_get_func("encoding_without_cache");
   this->create_kv_cache_func_ = mod_get_func("create_kv_cache");
-  this->reset_kv_cache_func_ = mod_get_func("reset_kv_cache");
-  if (this->reset_kv_cache_func_ == nullptr) {
-    this->reset_kv_cache_func_ = get_global_func("vm.builtin.attention_kv_cache_array_clear");
-    support_backtracking_kv_ = true;
+
+  if (!use_paged_kv_cache) {
+    this->reset_kv_cache_func_ = mod_get_func("reset_kv_cache");
+    if (this->reset_kv_cache_func_ == nullptr) {
+      this->reset_kv_cache_func_ = get_global_func("vm.builtin.attention_kv_cache_array_clear");
+      support_backtracking_kv_ = true;
+    } else {
+      support_backtracking_kv_ = false;
+    }
+    this->fkvcache_array_popn_ = get_global_func("vm.builtin.attention_kv_cache_array_popn");
+    this->remove_from_kv_cache_func_ = PackedFunc{nullptr};
   } else {
-    support_backtracking_kv_ = false;
+    support_backtracking_kv_ = true;
+    this->reset_kv_cache_func_ = get_global_func("vm.builtin.paged_attention_kv_cache_clear");
+    this->fkvcache_array_popn_ = get_global_func("vm.builtin.paged_attention_kv_cache_popn");
+    this->remove_from_kv_cache_func_ =
+        get_global_func("vm.builtin.paged_attention_kv_cache_remove");
   }
-  this->fkvcache_array_popn_ = get_global_func("vm.builtin.attention_kv_cache_array_popn");
 }
 
 ObjectRef FunctionTable::Empty(ShapeTuple shape, DataType dtype, Device device) const {

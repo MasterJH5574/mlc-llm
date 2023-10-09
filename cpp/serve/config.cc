@@ -14,11 +14,11 @@ namespace mlc {
 namespace llm {
 namespace serve {
 
-/****************** SamplingParams ******************/
+/****************** GenerationConfig ******************/
 
-TVM_REGISTER_OBJECT_TYPE(SamplingParamsNode);
+TVM_REGISTER_OBJECT_TYPE(GenerationConfigNode);
 
-SamplingParams::SamplingParams(String config_json_str) {
+GenerationConfig::GenerationConfig(String config_json_str) {
   picojson::value config_json;
   std::string err = picojson::parse(config_json, config_json_str);
   if (!err.empty()) {
@@ -26,7 +26,7 @@ SamplingParams::SamplingParams(String config_json_str) {
     return;
   }
 
-  ObjectPtr<SamplingParamsNode> n = make_object<SamplingParamsNode>();
+  ObjectPtr<GenerationConfigNode> n = make_object<GenerationConfigNode>();
 
   picojson::object config = config_json.get<picojson::object>();
   if (config.count("temperature")) {
@@ -42,9 +42,9 @@ SamplingParams::SamplingParams(String config_json_str) {
     n->repetition_penalty = config["repetition_penalty"].get<double>();
     CHECK(n->repetition_penalty > 0) << "Repetition penalty must be a positive number!";
   }
-  if (config.count("max_generation_length")) {
-    CHECK(config["max_generation_length"].is<int64_t>());
-    n->max_generation_length = config["max_generation_length"].get<int64_t>();
+  if (config.count("max_new_tokens")) {
+    CHECK(config["max_new_tokens"].is<int64_t>());
+    n->max_new_tokens = config["max_new_tokens"].get<int64_t>();
   }
   if (config.count("stop_strs")) {
     CHECK(config["stop_strs"].is<picojson::array>())

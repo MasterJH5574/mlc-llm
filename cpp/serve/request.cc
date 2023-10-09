@@ -15,10 +15,10 @@ namespace serve {
 
 TVM_REGISTER_OBJECT_TYPE(RequestNode);
 
-Request::Request(Array<Input> inputs, String sampling_params_json) {
+Request::Request(Array<Input> inputs, String generation_cfg_json) {
   ObjectPtr<RequestNode> n = make_object<RequestNode>();
   n->inputs = std::move(inputs);
-  n->sampling_params = SamplingParams(sampling_params_json);
+  n->generation_cfg = GenerationConfig(generation_cfg_json);
   data_ = std::move(n);
 }
 

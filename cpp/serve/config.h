@@ -15,29 +15,29 @@ namespace serve {
 
 using namespace tvm::runtime;
 
-/****************** Sampling config ******************/
+/****************** GenerationConfig ******************/
 
 /*! \brief The sampling configuration of a request. */
-class SamplingParamsNode : public Object {
+class GenerationConfigNode : public Object {
  public:
   double temperature = 0.8;
   double top_p = 0.95;
   double repetition_penalty = 1.0;
 
-  int max_generation_length = 128;
+  int max_new_tokens = 128;
   Array<String> stop_strs;
 
-  static constexpr const char* _type_key = "mlc.serve.SamplingParams";
+  static constexpr const char* _type_key = "mlc.serve.GenerationConfig";
   static constexpr const bool _type_has_method_sequal_reduce = false;
   static constexpr const bool _type_has_method_shash_reduce = false;
-  TVM_DECLARE_BASE_OBJECT_INFO(SamplingParamsNode, Object);
+  TVM_DECLARE_BASE_OBJECT_INFO(GenerationConfigNode, Object);
 };
 
-class SamplingParams : public ObjectRef {
+class GenerationConfig : public ObjectRef {
  public:
-  explicit SamplingParams(String config_json_str);
+  explicit GenerationConfig(String config_json_str);
 
-  TVM_DEFINE_OBJECT_REF_METHODS(SamplingParams, ObjectRef, SamplingParamsNode);
+  TVM_DEFINE_OBJECT_REF_METHODS(GenerationConfig, ObjectRef, GenerationConfigNode);
 };
 
 /****************** KV Cache config ******************/

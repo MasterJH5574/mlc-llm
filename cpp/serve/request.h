@@ -39,7 +39,7 @@ class RequestNode : public Object {
    * \brief The sampling configuration which may contain temperature,
    * top_p, repetition_penalty, max_gen_len, etc.
    */
-  SamplingParams sampling_params;
+  GenerationConfig generation_cfg;
 
   static constexpr const char* _type_key = "mlc.serve.Request";
   static constexpr const bool _type_has_method_sequal_reduce = false;
@@ -49,7 +49,7 @@ class RequestNode : public Object {
 
 class Request : public ObjectRef {
  public:
-  explicit Request(Array<Input> inputs, String sampling_params_json);
+  explicit Request(Array<Input> inputs, String generation_cfg_json);
 
   TVM_DEFINE_OBJECT_REF_METHODS(Request, ObjectRef, RequestNode);
 };

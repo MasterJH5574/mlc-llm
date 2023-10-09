@@ -4,21 +4,23 @@
  */
 #include "input.h"
 
-#include <tvm/node/reflection.h>
-
 namespace mlc {
 namespace llm {
 namespace serve {
 
 /****************** Inputs ******************/
 
-// TVM_REGISTER_NODE_TYPE(TextNode);
+TVM_REGISTER_OBJECT_TYPE(InputNode);
 
-TextInput::TextInput(String prompt) {
+TVM_REGISTER_OBJECT_TYPE(TextInputNode);
+
+TextInput::TextInput(String text) {
   ObjectPtr<TextInputNode> n = make_object<TextInputNode>();
-  n->prompt = std::move(prompt);
+  n->text = std::move(text);
   data_ = std::move(n);
 }
+
+TVM_REGISTER_OBJECT_TYPE(TokenInputNode);
 
 TokenInput::TokenInput(ShapeTuple token_ids) {
   ObjectPtr<TokenInputNode> n = make_object<TokenInputNode>();
@@ -29,12 +31,6 @@ TokenInput::TokenInput(ShapeTuple token_ids) {
 TokenInput::TokenInput(std::vector<int32_t> token_ids) {
   ObjectPtr<TokenInputNode> n = make_object<TokenInputNode>();
   n->token_ids = ShapeTuple(token_ids.begin(), token_ids.end());
-  data_ = std::move(n);
-}
-
-TokenInput::TokenInput(int32_t token_id) {
-  ObjectPtr<TokenInputNode> n = make_object<TokenInputNode>();
-  n->token_ids = ShapeTuple{token_id};
   data_ = std::move(n);
 }
 

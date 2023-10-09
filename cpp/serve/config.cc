@@ -7,7 +7,6 @@
 #include "config.h"
 
 #include <picojson.h>
-#include <tvm/node/reflection.h>
 
 #include "input.h"
 
@@ -15,9 +14,11 @@ namespace mlc {
 namespace llm {
 namespace serve {
 
-/****************** SampleConfig ******************/
+/****************** SamplingParams ******************/
 
-SampleConfig::SampleConfig(String config_json_str) {
+TVM_REGISTER_OBJECT_TYPE(SamplingParamsNode);
+
+SamplingParams::SamplingParams(String config_json_str) {
   picojson::value config_json;
   std::string err = picojson::parse(config_json, config_json_str);
   if (!err.empty()) {
@@ -25,7 +26,7 @@ SampleConfig::SampleConfig(String config_json_str) {
     return;
   }
 
-  ObjectPtr<SampleConfigNode> n = make_object<SampleConfigNode>();
+  ObjectPtr<SamplingParamsNode> n = make_object<SamplingParamsNode>();
 
   picojson::object config = config_json.get<picojson::object>();
   if (config.count("temperature")) {
@@ -62,6 +63,8 @@ SampleConfig::SampleConfig(String config_json_str) {
 }
 
 /****************** KVCacheConfig ******************/
+
+TVM_REGISTER_OBJECT_TYPE(KVCacheConfigNode);
 
 KVCacheConfig::KVCacheConfig(int page_size, int max_num_sequence, int max_total_sequence_length) {
   ObjectPtr<KVCacheConfigNode> n = make_object<KVCacheConfigNode>();

@@ -205,7 +205,6 @@ def openai_api_get_unsupported_fields(
     """Get the unsupported fields in the request."""
     unsupported_field_default_values: List[Tuple[str, Any]] = [
         ("best_of", 1),
-        ("logit_bias", None),
         ("logprobs", None),
         ("n", 1),
         ("response_format", "text"),
@@ -235,6 +234,11 @@ def openai_api_get_generation_config(
     ]
     for arg_name in arg_names:
         kwargs[arg_name] = getattr(request, arg_name)
+    if request.logit_bias is not None:
+        logit_bias = {}
+        for token_id_str, bias in request.logit_bias.items():
+            logit_bias[int(token_id_str)] = bias
+        kwargs["logit_bias"] = logit_bias
     if kwargs["max_tokens"] is None:
         # Setting to -1 means the generation will not stop until
         # exceeding model capability or hit any stop criteria.

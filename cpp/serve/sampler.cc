@@ -80,6 +80,30 @@ void ApplyFrequencyAndPresencePenaltyOnCPU(NDArray logits, int token_offset,
 }
 
 /*!
+ * \brief In-place apply logit bias.
+ * \param logits The logits (a batch) to be in-place mutated.
+ * \param token_offset The offset of the token in the batch
+ * whose logits will be updated.
+ * \param state The request state that contains history tokens.
+ * \param logit_bias The logit bias map.
+ */
+void ApplyLogitBiasOnCPU(NDArray logits, int token_offset, RequestModelState state,
+                         const std::unordered_map<int, float>& logit_bias) {
+  // logits: (n, v)
+  CHECK(logits.DataType() == DataType::Float(32)) << "Logits data type is not float32!";
+  CHECK_EQ(logits->ndim, 2);
+  CHECK_EQ(logits->device.device_type, DLDeviceType::kDLCPU);
+  int vocab_size = logits->shape[1];
+
+  float* logits_raw_data = static_cast<float*>(logits->data) + (token_offset * vocab_size);
+  for (auto [token_id, bias] : logit_bias) {
+    ICHECK_GE(token_id, 0);
+    ICHECK_LT(token_id, vocab_size);
+    logits_raw_data[token_id] += bias;
+  }
+}
+
+/*!
  * \brief In-place compute softmax with temperature on CPU.
  * \param logits The logits (a batch) to compute softmax from.
  * \param token_offset The offset of the token in the batch
@@ -451,9 +475,10 @@ class CPUSampler : public SamplerObj {
     // - Return false if any sampling param has frequency/presence penalty other than 0.0.
     // - Return false if any sampling param has repetition penalty other than 1.0.
     // - Return false if any sampling param has zero temperature.
+    // - Return false if any sampling param has non-empty logit bias map.
     for (GenerationConfig cfg : generation_cfg) {
       if (cfg->frequency_penalty != 0.0 || cfg->presence_penalty != 0.0 ||
-          cfg->repetition_penalty != 1.0 || cfg->temperature < 1e-6) {
+          cfg->repetition_penalty != 1.0 || cfg->temperature < 1e-6 || !cfg->logit_bias.empty()) {
         return false;
       }
     }
@@ -589,6 +614,12 @@ class CPUSampler : public SamplerObj {
   void SinglePosComputeProbsFromLogitsInplace(NDArray logits, int offset,
                                               const RequestModelState& state,
                                               const GenerationConfig& generation_cfg) {
+    // - Apply logit bias (inplace).
+    if (!generation_cfg->logit_bias.empty()) {
+      RECORD_EVENT(trace_recorder_, state->request->id, "start logit bias");
+      ApplyLogitBiasOnCPU(logits, offset, state, generation_cfg->logit_bias);
+      RECORD_EVENT(trace_recorder_, state->request->id, "finish logit bias");
+    }
     // - Apply frequency/presence penalty or repetition penalty (inplace).
     if (generation_cfg->frequency_penalty != 0.0 || generation_cfg->presence_penalty != 0.0) {
       RECORD_EVENT(trace_recorder_, state->request->id, "start frequency/presence penalty");

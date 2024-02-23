@@ -481,6 +481,13 @@ def _attention_prefill(h_kv, h_q, d, dtype, target: Target):  # pylint: disable=
     tile_x, tile_y, tile_z = 64 // ((DataType(dtype).bits + 7) // 8) // max(d // 128, 1), d, 16
     L_per_cta = tile_x // group_size
 
+    if (
+        str(target.kind) == "webgpu"
+        and ((d + 127) // 128) * ((DataType(dtype).bits + 15) // 16) >= 4
+    ):
+        tile_z = 8
+        num_warps = 2
+
     def mask(causal, row, col, kv_len, qo_len):
         return T.if_then_else(
             causal > 0,
@@ -1122,6 +1129,13 @@ def _attention_prefill_ragged(
     num_warps = 4
     tile_x, tile_y, tile_z = 64 // ((DataType(dtype).bits + 7) // 8) // max(d // 128, 1), d, 16
     L_per_cta = tile_x // group_size
+
+    if (
+        str(target.kind) == "webgpu"
+        and ((d + 127) // 128) * ((DataType(dtype).bits + 15) // 16) >= 4
+    ):
+        tile_z = 8
+        num_warps = 2
 
     def mask(causal, row, col, kv_len, qo_len):
         return T.if_then_else(

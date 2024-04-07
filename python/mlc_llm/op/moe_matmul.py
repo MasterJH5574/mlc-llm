@@ -470,6 +470,110 @@ def group_gemm(x: Tensor, w: Tensor, indptr: Tensor):  # pylint: disable=too-man
     )
 
 
+def get_max_factor(n, factors):
+    factors = sorted(factors, reverse=True)
+    for factor in factors:
+        if n % factor == 0:
+            return factor
+    return 1
+
+
+def get_extent(sch: tir.Schedule, loop_rv: tir.schedule.LoopRV):
+    loop: tir.For = sch.get(loop_rv)
+    return loop.extent.value if isinstance(loop.extent, tir.IntImm) else loop.extent
+
+
+def get_params(len_S, len_R, target):
+    TAG_S, TAG_R = "threadIdx.y", "threadIdx.x"
+    if target.kind.name == "cuda":
+        VEC_C = 4
+        LOAD_V_SHARED = True
+        LOAD_V_VEC = 8
+        UNROLL = 256
+        if isinstance(len_S, int):
+            if len_S > len_R:
+                TS, TR = 4, 64
+            else:
+                TS, TR = 16, 32
+    elif target.kind.name == "metal":
+        # Note that the following tile size is tuned on M2 Ultra for 7B
+        TAG_S, TAG_R = "threadIdx.x", "threadIdx.y"
+        VEC_C = 1
+        LOAD_V_SHARED = False
+        LOAD_V_VEC = -1
+        UNROLL = 256
+        if isinstance(len_S, int):
+            if len_S > len_R:
+                TS, TR = 2, 32
+            else:
+                TS, TR = 2, 64
+    elif target.kind.name == "rocm":
+        VEC_C = 4
+        LOAD_V_SHARED = True
+        LOAD_V_VEC = 8
+        UNROLL = 256
+        if isinstance(len_S, int):
+            if len_S > len_R:
+                TS, TR = 1, 128
+            else:
+                TS, TR = 8, 64
+    elif target.kind.name == "opencl" and "android" in str(target.host):
+        TAG_S, TAG_R = "threadIdx.x", "threadIdx.y"
+        VEC_C = 8
+        LOAD_V_SHARED = False
+        LOAD_V_VEC = -1
+        UNROLL = 8
+        TS, TR = 2, 32
+    elif target.kind.name == "vulkan":
+        VEC_C = 4
+        LOAD_V_SHARED = True
+        LOAD_V_VEC = 4
+        UNROLL = 256
+        if isinstance(len_S, int):
+            if len_S > len_R:
+                TS, TR = 4, 32
+            else:
+                TS, TR = 16, 32
+    elif target.kind.name == "opencl" and "mali" in str(target.attrs):
+        VEC_C = 8
+        LOAD_V_SHARED = False
+        LOAD_V_VEC = -1
+        UNROLL = 64
+        TS, TR = 1, 64
+    else:
+        VEC_C = 1
+        LOAD_V_SHARED = False
+        LOAD_V_VEC = -1
+        UNROLL = 64
+        TS, TR = 1, 64
+
+    if not isinstance(len_S, int):
+        TS, TR = 1, 64
+
+    while TS * TR > target.max_num_threads:
+        if TS > 1:
+            TS //= 2
+        else:
+            TR //= 2
+
+    TILE_S, TILE_R = (2, 8)
+    VEC_C = min(get_max_factor(TILE_R, [1, 2, 4, 8]), VEC_C)
+    VEC_LOAD = 1
+    return {
+        "TAG_S": TAG_S,
+        "TAG_R": TAG_R,
+        "TS": TS,
+        "TR": TR,
+        "TILE_S": TILE_S,
+        "TILE_R": TILE_R,
+        "VEC_LOAD": VEC_LOAD,
+        "VEC_C": VEC_C,
+        "LOAD_V_SHARED": LOAD_V_SHARED,
+        "LOAD_V_VEC": LOAD_V_VEC,
+        "UNROLL": UNROLL,
+    }
+
+
 def dequantize_group_gemm(
     x: Tensor,
     w: Tensor,
@@ -518,6 +622,15 @@ def dequantize_group_gemm(
     num_elem_per_storage = DataType(storage_dtype).bits // quantize_dtype_bits
     num_group = (in_features + group_size - 1) // group_size
     num_storage = group_size // num_elem_per_storage * num_group
+    group_size = 32
+
+    import tvm
+
+    Ne, N, K = num_local_experts, out_features, in_features
+    CTA_COUNT = 2048
+    params = get_params(N, K, tvm.target.Target("cuda"))
+    BLK_B, BLK_N = 2, params["TILE_S"] * params["TS"]
+    assert N % BLK_N == 0
 
     def _dequantize(w, s, e, i, j):
         tir_bin_mask = tir.const((1 << quantize_dtype_bits) - 1, storage_dtype)
@@ -528,7 +641,218 @@ def dequantize_group_gemm(
         w = tir.bitwise_and(tir.shift_right(w, shift), tir_bin_mask).astype(model_dtype)
         return (w - tir_max_int) * s
 
-    Ne, N, K = num_local_experts, out_features, in_features
+    def _var(dtype):
+        return T.alloc_buffer((1,), dtype, scope="local")
+
+    # fmt: off
+    @T.prim_func(check_well_formed=False, private=True)
+    def dequantize_group_gemm2(
+        var_x: T.handle,
+        w: T.Buffer((Ne, N, num_storage), storage_dtype),
+        scale: T.Buffer((Ne, N, num_group), model_dtype),
+        indptr: T.Buffer((Ne + 1,), indptr_dtype),
+        var_o: T.handle,
+    ):
+        T.func_attr({"tir.noalias": True})
+        B = T.int32(is_size_var=True)
+        X = T.match_buffer(var_x, (B, K), model_dtype)
+        O = T.match_buffer(var_o, (B, N), model_dtype)
+        
+        for _bx in T.thread_binding(CTA_COUNT, thread="blockIdx.x"):
+            with T.block("CTA"):
+                T.reads()
+                T.writes()
+                bx = T.axis.spatial(CTA_COUNT, _bx)
+                
+                cur_e = _var("int32")
+                tile_id = _var("int32")
+                b_start = _var(indptr_dtype)
+                N_start = _var("int32")
+                indptr_local = T.alloc_buffer((Ne + 1,), indptr_dtype, scope="local")
+                for a0 in T.serial(Ne + 1):
+                    with T.block("indptr_local"):
+                        i = T.axis.spatial(Ne + 1, a0)
+                        indptr_local[i] = indptr[i]
+                
+                cur_e[0] = 0
+                tile_id[0] = bx
+                while T.tvm_thread_invariant(cur_e[0] < Ne):
+                    b_start[0] = indptr_local[cur_e[0]]
+                    while T.tvm_thread_invariant(b_start[0] < indptr_local[cur_e[0] + 1]):
+                        N_start[0] = tile_id[0] * BLK_N
+                        while T.tvm_thread_invariant(N_start[0] < N):
+                            # Process the current tile
+                            T.tvm_storage_sync("shared")
+                            with T.block("tile"):
+                                X_pad = T.alloc_buffer((BLK_B, K), model_dtype)
+                                W = T.alloc_buffer((BLK_N, K), model_dtype)
+                                O_tile = T.alloc_buffer((BLK_B, BLK_N), "float32")
+                                for a0, a1 in T.grid(BLK_B, K):
+                                    with T.block("X_pad"):
+                                        i, j = T.axis.remap("SS", [a0, a1])
+                                        X_pad[i, j] = T.if_then_else(b_start[0] + i < indptr_local[cur_e[0] + 1], X[b_start[0] + i, j], T.float16(0))
+                                for a0, a1 in T.grid(BLK_N, K):
+                                    with T.block("W_dequantize"):
+                                        i, j = T.axis.remap("SS", [a0, a1])
+                                        W[i, j] = _dequantize(w, scale, cur_e[0], N_start[0] + i, j)
+                                for a0, a1, a2 in T.grid(BLK_B, BLK_N, K):
+                                    with T.block("gemv"):
+                                        i, j, k = T.axis.remap("SSR", [a0, a1, a2])
+                                        with T.init():
+                                            O_tile[i, j] = T.float16(0)
+                                        O_tile[i, j] = O_tile[i, j] + X_pad[i, k] * W[j, k]
+                                for a0, a1 in T.grid(BLK_B, BLK_N):
+                                    with T.block("store"):
+                                        i, j = T.axis.remap("SS", [a0, a1])
+                                        if b_start[0] + i < indptr_local[cur_e[0] + 1]:
+                                            O[b_start[0] + i, N_start[0] + j] = O_tile[i, j]
+                            # Process the next tile
+                            tile_id[0] += CTA_COUNT
+                            N_start[0] += CTA_COUNT * BLK_N
+                        tile_id[0] -= N // BLK_N
+                        b_start[0] += BLK_B
+                    cur_e[0] += 1
+    # fmt: on
+
+    def apply(
+        TAG_S,
+        TAG_R,
+        TS,
+        TR,
+        TILE_S,
+        TILE_R,
+        VEC_LOAD,
+        VEC_C,
+        LOAD_V_SHARED,
+        LOAD_V_VEC,
+        UNROLL,
+    ):
+        sch = tir.Schedule(dequantize_group_gemm2)
+        gemv = sch.get_block("gemv")
+        # rfactor: reduce to tx * vec_c
+        _, s, r = sch.get_loops(block=gemv)
+        bx, ts, tile_s = sch.split(s, factors=[None, TS, TILE_S], preserve_unit_iters=True)
+        r, tr, tile_r_vec_n, vec_c = sch.split(
+            r, factors=[None, TR, TILE_R // VEC_C, VEC_C], preserve_unit_iters=True
+        )
+        sch.reorder(r, tile_r_vec_n, tr, vec_c)
+        tr_vec_c = sch.fuse(tr, vec_c)
+        rf = sch.rfactor(tr_vec_c, 0)
+
+        # rfactor: reduce to tx
+        _, bx, ts, tile_s, tr_vec_c = sch.get_loops(block=gemv)
+        tr, vec_c = sch.split(tr_vec_c, factors=[TR, None], preserve_unit_iters=True)
+        rf2 = sch.rfactor(tr, 0)
+        # bind, vectorize compute
+        batch_loop, bx, ts, tile_s, r, tile_r_vec_n, tr_vec_c = sch.get_loops(block=rf)
+        tr, vec_c = sch.split(tr_vec_c, factors=[TR, None], preserve_unit_iters=True)
+        sch.reorder(bx, ts, tr, r, tile_s, tile_r_vec_n, vec_c)
+        # sch.bind(bx, "blockIdx.x")
+        assert get_extent(sch, bx) == 1
+        sch.bind(ts, TAG_S)
+        sch.bind(tr, TAG_R)
+        # sch.vectorize(vec_c)
+        by, batch = sch.split(batch_loop, factors=[None, BLK_B])
+        # sch.bind(by, "blockIdx.y")
+        assert get_extent(sch, by) == 1
+        sch.reorder(bx, ts, tr, r, batch)
+
+        # vectorize load A
+        # (TODO) this is now actually problematic since the number of loops is dependent on the
+        # number of dimensions of A_q
+        dequantize_block = sch.get_block("W_dequantize")
+        sch.compute_inline(dequantize_block)
+
+        pad_input_block = sch.get_block("X_pad")
+        sch.compute_inline(pad_input_block)
+
+        # reduce tile_s * tr * vec to tile_s * tr
+        sch.reverse_compute_at(rf2, loop=bx, preserve_unit_loops=True)
+        tr, vec_c, batch_loop, *ts_tile_s = sch.get_loops(block=rf2)[2:]
+        ts_tile_s = sch.fuse(*ts_tile_s)
+        ts_o, ts_i, tile_s = sch.split(
+            ts_tile_s, factors=[None, TS, TILE_S], preserve_unit_iters=True
+        )
+        tile_s, vec_s = sch.split(
+            tile_s,
+            factors=[None, get_max_factor(TILE_S, [1, 2, 4, 8])],
+            preserve_unit_iters=True,
+        )
+        assert sch.get(ts_o).extent.value == 1
+        ts = sch.fuse(ts_o, ts_i)
+        sch.reorder(ts, tr, tile_s, batch_loop, vec_s, vec_c)
+        sch.bind(ts, TAG_S)
+        sch.bind(tr, TAG_R)
+        sch.vectorize(vec_s)
+
+        # reduce tile_s * tr to tile_s
+        sch.reverse_compute_at(gemv, loop=bx, preserve_unit_loops=True)
+
+        tr, batch_loop, *ts_tile_s = sch.get_loops(block=gemv)[2:]
+        ts_tile_s = sch.fuse(*ts_tile_s)
+        ts_o, ts_i, tile_s = sch.split(
+            ts_tile_s, factors=[None, TS, TILE_S], preserve_unit_iters=True
+        )
+        assert sch.get(ts_o).extent.value == 1
+        ts = sch.fuse(ts_o, ts_i)
+        sch.reorder(tile_s, batch_loop, ts, tr)
+        sch.bind(ts, TAG_S)
+        sch.bind(tr, TAG_R)
+
+        sch.decompose_reduction(rf, loop=sch.get_loops(block=rf)[4])
+        sch.decompose_reduction(rf2, loop=sch.get_loops(block=rf2)[-1])
+
+        sch.set_scope(rf, buffer_index=0, storage_scope="local")
+        sch.set_scope(rf2, buffer_index=0, storage_scope="local")
+
+        unroll_factor = UNROLL
+
+        sch.annotate(
+            block_or_loop=sch.get_loops(rf)[4],
+            ann_key="pragma_auto_unroll_max_step",
+            ann_val=unroll_factor,
+        )
+        sch.annotate(
+            block_or_loop=sch.get_loops(rf)[4],
+            ann_key="pragma_unroll_explicit",
+            ann_val=1,
+        )
+
+        sch.annotate(
+            block_or_loop=sch.get_loops(rf2)[4],
+            ann_key="pragma_auto_unroll_max_step",
+            ann_val=unroll_factor,
+        )
+        sch.annotate(
+            block_or_loop=sch.get_loops(rf2)[4],
+            ann_key="pragma_unroll_explicit",
+            ann_val=1,
+        )
+
+        epilogue = sch.get_consumers(gemv)
+        # Schedule epilogue
+        if epilogue:
+            epilogue = epilogue[0]
+            sch.reverse_compute_at(epilogue, bx, preserve_unit_loops=True)
+            ts_tile_s = sch.fuse(*sch.get_loops(epilogue)[3:])
+            ts_tile_s = sch.get_loops(epilogue)[-1]
+            ts_o, ts_i, tile_s = sch.split(
+                ts_tile_s, factors=[None, TS, TILE_S], preserve_unit_iters=True
+            )
+            assert sch.get(ts_o).extent.value == 1
+            ts = sch.fuse(ts_o, ts_i)
+            sch.bind(ts, TAG_S)
+            sch.set_scope(gemv, 0, "local")
+
+        return sch.mod["main"].with_attr("tir.is_scheduled", True)
+
+    return op.tensor_ir_op(
+        apply(**params),
+        "dequantize_group_gemm",
+        args=[x, w, scale, indptr],
+        out=Tensor.placeholder([x.shape[0], out_features], model_dtype),
+    )
+
     BLK_M, BLK_N, BLK_K = 8, 128, 32
     TX, TY, CTA_COUNT = 8, 32, 1024
     VEC_X, VEC_W, VEC_O, VEC_DOT = 1, 1, 1, 1

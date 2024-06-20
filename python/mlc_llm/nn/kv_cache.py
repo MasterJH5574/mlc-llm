@@ -122,6 +122,78 @@ class PagedKVCache(Object):  # pylint: disable=too-few-public-methods
             )
         ).reshape(b, s, num_qo_heads, d)
 
+    def attention_no_append(
+        self,
+        layer_id: int,
+        q: Tensor,
+        k: Tensor,
+        v: Tensor,
+        attn_score_scaling_factor: float = 1.0,
+    ) -> Tensor:
+        # pylint: disable=protected-access
+        b, s, num_qo_heads, d = q._expr.struct_info.shape
+        q = q.reshape(b * s, q.shape[2], d)
+        k = k.reshape(b * s, k.shape[2], d)
+        v = v.reshape(b * s, v.shape[2], d)
+        return Tensor(
+            _expr=rx.BlockBuilder.current().emit(
+                rx.call_dps_packed(
+                    "vm.builtin.attention_kv_cache_attention_no_append",
+                    [
+                        self._expr,
+                        rx.PrimValue(layer_id),  # type: ignore[arg-type]
+                        rx.PrimValue(attn_score_scaling_factor),
+                        q._expr,
+                        k._expr,
+                        v._expr,
+                    ],
+                    out_sinfo=q._expr.struct_info,
+                )
+            )
+        ).reshape(b, s, num_qo_heads, d)
+
+    def cross_attention(
+        self,
+        layer_id: int,
+        q: Tensor,
+        attn_score_scaling_factor: float = 1.0,
+    ) -> Tensor:
+        # pylint: disable=protected-access
+        b, s, num_qo_heads, d = q._expr.struct_info.shape
+        q = q.reshape(b * s, num_qo_heads, d)
+        return Tensor(
+            _expr=rx.BlockBuilder.current().emit(
+                rx.call_dps_packed(
+                    "vm.builtin.attention_kv_cache_cross_attention",
+                    [
+                        self._expr,
+                        rx.PrimValue(layer_id),  # type: ignore[arg-type]
+                        rx.PrimValue(attn_score_scaling_factor),
+                        q._expr,
+                    ],
+                    out_sinfo=q._expr.struct_info,
+                )
+            )
+        ).reshape(b, s, num_qo_heads, d)
+
+    def push_cross_attention_kv(self, layer_id: int, k: Tensor, v: Tensor) -> "PagedKVCache":
+        b, s, num_kv_heads, d = k._expr.struct_info.shape
+        k = k.reshape(b * s, num_kv_heads, d)
+        v = v.reshape(b * s, num_kv_heads, d)
+        return PagedKVCache(
+            _expr=rx.BlockBuilder.current().emit(
+                rx.call_pure_packed(
+                    "vm.builtin.attention_kv_cache_push_cross_attention_kv",
+                    self._expr,
+                    rx.PrimValue(layer_id),  # type: ignore[arg-type]
+                    k._expr,
+                    v._expr,
+                    sinfo_args=self._expr.struct_info,
+                )
+            ),
+            _name="paged_kv_cache",
+        )
+
     def get_query_positions(self, total_length: tir.PrimExpr) -> Tensor:
         """Get the in-sequence positions of each slot in the query,
         which are needed for applying positional embeddings in some models.

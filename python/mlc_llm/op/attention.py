@@ -73,26 +73,38 @@ def attention(  # pylint: disable=invalid-name,too-many-locals,too-many-statemen
         if h_kv != h_q:
             k = k.repeat(h_q // h_kv, axis=2)
             v = v.repeat(h_q // h_kv, axis=2)
-        q = op.permute_dims(q, [0, 2, 1, 3])
-        k = op.permute_dims(k, [0, 2, 1, 3])
-        v = op.permute_dims(v, [0, 2, 1, 3])
-        model_dtype = q.dtype
-        if qk_dtype is None:
-            qk_dtype = model_dtype
-        attn_weights = op.matmul(  # [b, h, s, t]
-            q,  # [b, h, s, d]
-            op.permute_dims(k, [0, 1, 3, 2]),  # [b, h, d, t]
-            out_dtype=qk_dtype,
-        ) / math.sqrt(d)
-        if attn_score_scaling_factor != 1.0:
-            attn_weights = attn_weights * attn_score_scaling_factor
-        attn_weights = attn_weights.maximum(tir.min_value(model_dtype)).minimum(
-            casual_mask.astype(qk_dtype)
+        from xxx.kv_cache import single_sequence_prefill
+
+        result = op.tensor_ir_op(
+            single_sequence_prefill(some shape args, dtype, etc.),
+            name_hint="single_sequence_prefill",
+            args=[q, k, v],
+            out=[nn.Tensor.placeholder(q.shape, q.dtype), nn.Tensor.placeholder((q.shape[0], q.shape[1]), "float32")],
         )
-        attn_weights = op.softmax(attn_weights.astype("float32"), axis=-1).astype(model_dtype)
-        output = op.matmul(attn_weights, v)  # [b, h, s, d] <= [b, h, s, t] x [b, h, t, d]
-        output = op.permute_dims(output, [0, 2, 1, 3])  #  [b, s, h, d]
-        output = op.reshape(output, [b, s, h_q * d])  # [b, s, h * d]
+        assert isinstance(result, tuple)
+        output = result[0]
+
+
+        # q = op.permute_dims(q, [0, 2, 1, 3])
+        # k = op.permute_dims(k, [0, 2, 1, 3])
+        # v = op.permute_dims(v, [0, 2, 1, 3])
+        # model_dtype = q.dtype
+        # if qk_dtype is None:
+        #     qk_dtype = model_dtype
+        # attn_weights = op.matmul(  # [b, h, s, t]
+        #     q,  # [b, h, s, d]
+        #     op.permute_dims(k, [0, 1, 3, 2]),  # [b, h, d, t]
+        #     out_dtype=qk_dtype,
+        # ) / math.sqrt(d)
+        # if attn_score_scaling_factor != 1.0:
+        #     attn_weights = attn_weights * attn_score_scaling_factor
+        # attn_weights = attn_weights.maximum(tir.min_value(model_dtype)).minimum(
+        #     casual_mask.astype(qk_dtype)
+        # )
+        # attn_weights = op.softmax(attn_weights.astype("float32"), axis=-1).astype(model_dtype)
+        # output = op.matmul(attn_weights, v)  # [b, h, s, d] <= [b, h, s, t] x [b, h, t, d]
+        # output = op.permute_dims(output, [0, 2, 1, 3])  #  [b, s, h, d]
+        # output = op.reshape(output, [b, s, h_q * d])  # [b, s, h * d]
         return output
 
     # FlashInfer Implementation

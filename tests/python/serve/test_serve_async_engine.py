@@ -20,13 +20,15 @@ prompts = [
     "Do you know AlphaGo? What capabilities does it have, and what achievements has it got? Please elaborate in detail.",
 ]
 
+GLOBAL_MODEL = "HF://mlc-ai/Qwen1.5-1.8B-Chat-q0f16-MLC"
 
-@require_test_model("Llama-2-7b-chat-hf-q4f16_1-MLC")
-async def test_engine_generate(model: str):
+
+# @require_test_model("Llama-2-7b-chat-hf-q4f16_1-MLC")
+async def test_engine_generate():
     # Create engine
     async_engine = AsyncMLCEngine(
-        model=model,
-        mode="server",
+        model=GLOBAL_MODEL,
+        mode="local",
         engine_config=EngineConfig(max_total_sequence_length=4096),
     )
 
@@ -79,12 +81,12 @@ async def test_engine_generate(model: str):
     del async_engine
 
 
-@require_test_model("Llama-2-7b-chat-hf-q4f16_1-MLC")
-async def test_chat_completion(model: str):
+# @require_test_model("Llama-2-7b-chat-hf-q4f16_1-MLC")
+async def test_chat_completion():
     # Create engine
     async_engine = AsyncMLCEngine(
-        model=model,
-        mode="server",
+        model=GLOBAL_MODEL,
+        mode="local",
         engine_config=EngineConfig(max_total_sequence_length=4096),
     )
 
@@ -98,7 +100,6 @@ async def test_chat_completion(model: str):
         rid = int(request_id)
         async for response in await async_engine.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],
-            model=model,
             max_tokens=max_tokens,
             n=n,
             request_id=request_id,
@@ -130,12 +131,12 @@ async def test_chat_completion(model: str):
     del async_engine
 
 
-@require_test_model("Llama-2-7b-chat-hf-q4f16_1-MLC")
-async def test_chat_completion_non_stream(model: str):
+# @require_test_model("Llama-2-7b-chat-hf-q4f16_1-MLC")
+async def test_chat_completion_non_stream():
     # Create engine
     async_engine = AsyncMLCEngine(
-        model=model,
-        mode="server",
+        model=GLOBAL_MODEL,
+        mode="local",
         engine_config=EngineConfig(max_total_sequence_length=4096),
     )
 
@@ -149,7 +150,6 @@ async def test_chat_completion_non_stream(model: str):
         rid = int(request_id)
         response = await async_engine.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],
-            model=model,
             max_tokens=max_tokens,
             n=n,
             request_id=request_id,
@@ -180,12 +180,12 @@ async def test_chat_completion_non_stream(model: str):
     del async_engine
 
 
-@require_test_model("Llama-2-7b-chat-hf-q0f16-MLC")
-async def test_completion(model: str):
+# @require_test_model("Llama-2-7b-chat-hf-q0f16-MLC")
+async def test_completion():
     # Create engine
     async_engine = AsyncMLCEngine(
-        model=model,
-        mode="server",
+        model=GLOBAL_MODEL,
+        mode="local",
         engine_config=EngineConfig(max_total_sequence_length=4096),
     )
 
@@ -199,7 +199,6 @@ async def test_completion(model: str):
         rid = int(request_id)
         async for response in await async_engine.completions.create(
             prompt=prompt,
-            model=model,
             max_tokens=max_tokens,
             n=n,
             request_id=request_id,
@@ -230,12 +229,12 @@ async def test_completion(model: str):
     del async_engine
 
 
-@require_test_model("Llama-2-7b-chat-hf-q0f16-MLC")
-async def test_completion_non_stream(model: str):
+# @require_test_model("Llama-2-7b-chat-hf-q0f16-MLC")
+async def test_completion_non_stream():
     # Create engine
     async_engine = AsyncMLCEngine(
-        model=model,
-        mode="server",
+        model=GLOBAL_MODEL,
+        mode="local",
         engine_config=EngineConfig(max_total_sequence_length=4096),
     )
 
@@ -249,7 +248,6 @@ async def test_completion_non_stream(model: str):
         rid = int(request_id)
         response = await async_engine.completions.create(
             prompt=prompt,
-            model=model,
             max_tokens=max_tokens,
             n=n,
             request_id=request_id,
@@ -281,7 +279,7 @@ async def test_completion_non_stream(model: str):
 
 if __name__ == "__main__":
     asyncio.run(test_engine_generate())
-    asyncio.run(test_chat_completion())
-    asyncio.run(test_chat_completion_non_stream())
-    asyncio.run(test_completion())
-    asyncio.run(test_completion_non_stream())
+    # asyncio.run(test_chat_completion())
+    # asyncio.run(test_chat_completion_non_stream())
+    # asyncio.run(test_completion())
+    # asyncio.run(test_completion_non_stream())

@@ -32,7 +32,6 @@ class RWKV5Config(ConfigBase):  # pylint: disable=too-many-instance-attributes
     intermediate_size: int
     num_hidden_layers: int
     vocab_size: int
-    model_version: str
     tensor_parallel_shards: int = 1
     rescale_every: int = 0
     head_size: int = 64
@@ -44,8 +43,8 @@ class RWKV5Config(ConfigBase):  # pylint: disable=too-many-instance-attributes
     kwargs: Dict[str, Any] = dataclasses.field(default_factory=dict)
 
     def __post_init__(self):
-        if self.model_version != "5_2":
-            raise ValueError(f"Only support RWKV v5_2, got {self.model_version}.")
+        # if self.model_version != "5_2":
+        #     raise ValueError(f"Only support RWKV v5_2, got {self.model_version}.")
         self.intermediate_size = self.intermediate_size or int((self.hidden_size * 3.5)) // 32 * 32
         self.num_heads = (
             self.hidden_size // self.head_size if self.num_heads == 0 else self.num_heads

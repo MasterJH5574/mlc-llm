@@ -207,7 +207,6 @@ struct EngineMetrics {
    */
   void UpdateDecodeTimeByBatchSize(int batch_size, double time) {
     if (batch_size < kEndFineGrainedTrackingBatchSize) {
-      // LOG(INFO) << "Update decode time for batch size " << batch_size;
       decode_time_by_batch_size[batch_size].Update(time);
     }
   }
@@ -216,7 +215,6 @@ struct EngineMetrics {
    * The time will be ignored if the batch size is greater than `kMaxBatchSizeForTracking`.
    */
   void UpdateDraftTimeByBatchSize(int batch_size, double time) {
-    // LOG(INFO) << "Update draft time for batch size " << batch_size;
     if (batch_size < kEndFineGrainedTrackingBatchSize) {
       draft_time_by_batch_size[batch_size].Update(time);
     }
@@ -227,7 +225,6 @@ struct EngineMetrics {
    * `kMaxBatchSizeForTracking`.
    */
   void UpdateVerifyTimeByBatchSize(int effective_batch_size, double time) {
-    // LOG(INFO) << "Update verify time for effective batch size " << effective_batch_size;
     if (effective_batch_size < kEndFineGrainedTrackingBatchSize) {
       verify_time_by_batch_size[effective_batch_size].Update(time);
     }

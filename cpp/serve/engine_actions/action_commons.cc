@@ -57,7 +57,6 @@ Array<EngineAction> CreateEngineActions(Array<Model> models, EngineConfig engine
 
     // The "small draft" mode speculative decoding.
     if (engine_config->spec_draft_length > 0) {
-      LOG(INFO) << "fixed length spec decode";
       // If "engine_config->spec_draft_length" > 0, it means the draft length is
       // configured to be a fixed value.
       return {
@@ -73,7 +72,6 @@ Array<EngineAction> CreateEngineActions(Array<Model> models, EngineConfig engine
           EngineAction::BatchVerify(models, logit_processor, sampler, model_workspaces,
                                     draft_token_workspace_manager, engine_config, trace_recorder)};
     } else {
-      LOG(INFO) << "auto spec decode";
       // "engine_config->spec_draft_length" being 0 means we want to enable
       // automatic speculative decoding, which decides the spec decoding draft length
       // automatically.

@@ -2,11 +2,12 @@
 
 # pylint: disable=too-many-statements,too-many-lines,too-many-arguments
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from tvm import relax as rx
 from tvm import tir
+from tvm.relax.frontend.nn import Tensor
 from tvm.relax.frontend.nn.llm.kv_cache import PagedKVCache as TVMPagedKVCache
 from tvm.relax.frontend.nn.llm.kv_cache import RopeMode
 
@@ -77,4 +78,88 @@ class PagedKVCache(TVMPagedKVCache):  # pylint: disable=too-few-public-methods
                 sinfo_args=rx.ObjectStructInfo(),
             ),
             _name=name,
+        )
+
+    def append_kv_with_output(
+        self, layer_id: int, k: Tensor, v: Tensor, context_length: int, output: Tensor
+    ) -> Tensor:
+        """"""
+        b, s, length, d = k._expr.struct_info.shape
+        k = k.reshape(b * s, length, d)
+        v = v.reshape(b * s, length, d)
+        bb = rx.BlockBuilder.current()
+        return Tensor(
+            _expr=bb.emit(
+                rx.call_pure_packed(
+                    "vm.builtin.attention_kv_cache_append_kv_with_output",
+                    self._expr,
+                    rx.PrimValue(layer_id),
+                    k._expr,
+                    v._expr,
+                    rx.PrimValue(context_length),
+                    output._expr,
+                    sinfo_args=output._expr.struct_info,
+                ),
+                name_hint="output",
+            )
+        )
+
+    def get_compact_kv(
+        self,
+        seq_id: tir.PrimExpr,
+        layer_id: int,
+        batch_size: tir.PrimExpr,
+        length: tir.PrimExpr,
+        num_kv_heads: int,
+        head_dim: int,
+        dtype: str,
+    ) -> Tuple[Tensor, Tensor]:
+        """Get the compact full KV of the running sequnece.
+        Limitation: it's expected that only one sequence is running.
+        """
+        bb = rx.BlockBuilder.current()
+        kv_sinfo = rx.TensorStructInfo([batch_size, length, num_kv_heads, head_dim], dtype)
+        kv = bb.emit(
+            rx.call_dps_packed(
+                "vm.builtin.attention_kv_cache_debug_get_kv",
+                args=[
+                    self._expr,
+                    rx.PrimValue(seq_id),
+                    rx.PrimValue(layer_id),
+                    rx.PrimValue(0),
+                    length,
+                ],
+                out_sinfo=[kv_sinfo, kv_sinfo],
+            ),
+            name_hint="fetched_kv",
+        )
+        return Tensor(_expr=bb.emit(kv[0])), Tensor(_expr=bb.emit(kv[1]))
+
+    def get_last_qkv(
+        self,
+        batch_size: tir.PrimExpr,
+        length: tir.PrimExpr,
+        num_qo_heads: int,
+        num_kv_heads: int,
+        head_dim: int,
+        dtype: str,
+    ) -> Tuple[Tensor, Tensor, Tensor]:
+        bb = rx.BlockBuilder.current()
+        q_sinfo = rx.TensorStructInfo([batch_size * length, num_qo_heads, head_dim], dtype)
+        kv_sinfo = rx.TensorStructInfo([batch_size * length, num_kv_heads, head_dim], dtype)
+        qkv = bb.emit(
+            rx.call_pure_packed(
+                "vm.builtin.attention_kv_cache_debug_get_last_qkv",
+                self._expr,
+                sinfo_args=[q_sinfo, kv_sinfo, kv_sinfo],
+            ),
+            name_hint="last_qkv",
+        )
+        q = Tensor(_expr=bb.emit(qkv[0]))
+        k = Tensor(_expr=bb.emit(qkv[1]))
+        v = Tensor(_expr=bb.emit(qkv[2]))
+        return (
+            q.reshape(batch_size, length, num_qo_heads, head_dim),
+            k.reshape(batch_size, length, num_kv_heads, head_dim),
+            v.reshape(batch_size, length, num_kv_heads, head_dim),
         )

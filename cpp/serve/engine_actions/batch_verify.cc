@@ -268,6 +268,7 @@ class BatchVerifyActionObj : public EngineActionObj {
 
     auto tend = std::chrono::high_resolution_clock::now();
     double elapsed_time = static_cast<double>((tend - tstart).count()) / 1e9;
+    LOG(INFO) << "verify " << total_verify_length << ": " << elapsed_time;
     estate->metrics.engine_decode_time_sum += elapsed_time;
     estate->metrics.UpdateVerifyTimeByBatchSize(total_verify_length, elapsed_time);
 

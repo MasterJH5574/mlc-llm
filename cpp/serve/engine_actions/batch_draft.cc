@@ -149,6 +149,7 @@ class BatchDraftActionObj : public EngineActionObj {
                                     mstates[i]->committed_tokens.size() + 1);
             for (size_t j = mstates[i]->committed_tokens.size();
                  j < running_rsentries[i]->mstates[0]->committed_tokens.size(); ++j) {
+              CHECK(false);
               // This draft model is lagging behind the main model.
               // It may happen when the engine just switches from the normal batch decode
               // mode to the speculative decoding mode.

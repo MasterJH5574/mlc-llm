@@ -134,7 +134,7 @@ def main(argv):
     parser.add_argument(
         "--speculative-mode",
         type=str,
-        choices=["disable", "small_draft", "eagle", "medusa"],
+        choices=["disable", "small_draft", "eagle", "medusa", "magic_dec2"],
         default="disable",
         help=HELP["speculative_mode_serve"] + ' (default: "%(default)s")',
     )

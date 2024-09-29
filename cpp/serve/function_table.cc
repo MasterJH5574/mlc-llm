@@ -213,6 +213,7 @@ void FunctionTable::_InitFunctions() {
   this->image_embed_func_ = mod_get_func("image_embed");
   this->single_batch_prefill_func_ = mod_get_func("prefill");
   this->single_batch_decode_func_ = mod_get_func("decode");
+  this->single_prefill_snap_kv_func_ = mod_get_func("prefill_snap_kv");
   this->prefill_func_ = mod_get_func("batch_prefill");
   this->decode_func_ = mod_get_func("batch_decode");
   this->verify_func_ = mod_get_func("batch_verify");

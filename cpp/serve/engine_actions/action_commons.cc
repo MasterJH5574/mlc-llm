@@ -20,7 +20,6 @@ Array<EngineAction> CreateEngineActions(Array<Model> models, EngineConfig engine
                                         Optional<EventTraceRecorder> trace_recorder) {
   if (engine_config->speculative_mode != SpeculativeMode::kDisable) {
     // Speculative decoding is only possible for more than one model.
-    ICHECK_GT(models.size(), 1U);
     if (engine_config->speculative_mode == SpeculativeMode::kEagle) {
       CHECK_GT(engine_config->spec_draft_length, 0)
           << "The automatic spec decoding does not support Eagle mode as of now.";
@@ -53,6 +52,23 @@ Array<EngineAction> CreateEngineActions(Array<Model> models, EngineConfig engine
               EngineAction::EagleBatchVerify(models, logit_processor, sampler, model_workspaces,
                                              draft_token_workspace_manager, engine_config,
                                              trace_recorder)};
+    }
+    if (engine_config->speculative_mode == SpeculativeMode::kMagicDec2) {
+      CHECK_EQ(models.size(), 1);
+      Model copied_draft_model = models[0]->CopyToDraftModel();
+      Array<Model> model_pair{models[0], copied_draft_model};
+      return {
+          EngineAction::MagicDec2NewRequestPrefill(models,            //
+                                                   logit_processor,   //
+                                                   sampler,           //
+                                                   model_workspaces,  //
+                                                   engine_config,     //
+                                                   model_configs,     //
+                                                   trace_recorder),
+          EngineAction::BatchDraft(model_pair, logit_processor, sampler, model_workspaces,
+                                   draft_token_workspace_manager, engine_config, trace_recorder),
+          EngineAction::BatchVerify(model_pair, logit_processor, sampler, model_workspaces,
+                                    draft_token_workspace_manager, engine_config, trace_recorder)};
     }
 
     // The "small draft" mode speculative decoding.
@@ -106,7 +122,7 @@ Array<EngineAction> CreateEngineActions(Array<Model> models, EngineConfig engine
                                           engine_config,     //
                                           model_configs,     //
                                           trace_recorder),
-          EngineAction::BatchJumpForward(models, tokenizer, trace_recorder),
+          // EngineAction::BatchJumpForward(models, tokenizer, trace_recorder),
           EngineAction::BatchDecode(models, tokenizer, logit_processor, sampler, engine_config,
                                     trace_recorder)};
 }
@@ -297,6 +313,7 @@ RequestStateEntry PreemptLastRunningRequestStateEntry(
     EngineState estate, const Array<Model>& models,
     Optional<DraftTokenWorkspaceManager> draft_token_workspace_manager,
     Optional<EventTraceRecorder> trace_recorder) {
+  CHECK(false) << "preemption disabled";
   ICHECK(!estate->running_queue.empty());
   Request request = estate->running_queue.back();
 

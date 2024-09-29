@@ -87,6 +87,24 @@ class EngineAction : public ObjectRef {
       DraftTokenWorkspaceManager draft_token_workspace_manager, EngineConfig engine_config,
       std::vector<picojson::object> model_configs, Optional<EventTraceRecorder> trace_recorder);
   /*!
+   * \brief Create the action that prefills requests in the `waiting_queue`
+   * of the engine state.
+   * \param models The models to run prefill in.
+   * \param logit_processor The logit processor.
+   * \param sampler The sampler to sample new tokens.
+   * \param model_workspaces The workspace of each model.
+   * \param engine_config The engine config.
+   * \param model_configs The config of each model.
+   * \param trace_recorder The event trace recorder for requests.
+   * \return The created action object.
+   */
+  static EngineAction MagicDec2NewRequestPrefill(Array<Model> models,
+                                                 LogitProcessor logit_processor, Sampler sampler,
+                                                 std::vector<ModelWorkspace> model_workspaces,
+                                                 EngineConfig engine_config,
+                                                 std::vector<picojson::object> model_configs,
+                                                 Optional<EventTraceRecorder> trace_recorder);
+  /*!
    * \brief Create the action that runs one-step decode for requests in the
    * `running_queue` of engine state. Preempt low-priority requests
    * accordingly when it is impossible to decode all the running requests.

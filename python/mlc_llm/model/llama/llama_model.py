@@ -4,6 +4,7 @@ TODO: add docstring
 """
 
 import dataclasses
+import math
 from typing import Any, Dict, Optional
 
 from tvm import te, tir
@@ -156,7 +157,15 @@ class LlamaAttention(nn.Module):  # pylint: disable=too-many-instance-attributes
         )
         self.o_proj = nn.Linear(self.num_q_heads * self.head_dim, config.hidden_size, bias=False)
 
-    def forward(self, hidden_states: Tensor, paged_kv_cache: PagedKVCache, layer_id: int):
+    def forward(
+        self,
+        hidden_states: Tensor,
+        paged_kv_cache: PagedKVCache,
+        layer_id: int,
+        snap_kv_draft_model_kv_cache: Optional[PagedKVCache] = None,
+        context_length: Optional[tir.PrimExpr] = None,
+        seq_id: Optional[tir.PrimExpr] = None,
+    ):
         d, h_q, h_kv = self.head_dim, self.num_q_heads, self.num_kv_heads
         b, s, _ = hidden_states.shape
         # QKV Projection
@@ -167,7 +176,122 @@ class LlamaAttention(nn.Module):  # pylint: disable=too-many-instance-attributes
             paged_kv_cache.attention_with_fused_qkv(layer_id, qkv, self.num_q_heads),
             (b, s, h_q * d),
         )
+        if snap_kv_draft_model_kv_cache is not None:
+            output = self.snap_kv_generate_draft_kv(
+                qkv,
+                paged_kv_cache,
+                snap_kv_draft_model_kv_cache,
+                context_length,
+                seq_id,
+                layer_id,
+                output,
+            )
         return self.o_proj(output)
+
+    def snap_kv_generate_draft_kv(
+        self,
+        qkv: Tensor,
+        paged_kv_cache: PagedKVCache,
+        snap_kv_draft_model_kv_cache: PagedKVCache,
+        context_length: tir.PrimExpr,
+        seq_id: tir.PrimExpr,
+        layer_id: int,
+        output: Tensor,
+    ):
+        # Using the whole input q as the observation q.
+        # Limitation: support only one sequence at a time. Doesn't support batching.
+        # This is because `paged_kv_cache.get_compact_kv()` only supports one sequence at a time.
+
+        from tvm import relax
+
+        # Hardcode draft budget to be 4096, window size to be 32
+        draft_budget = 2048
+        obs_window_size = 32  # should equal to `s`
+
+        def _apply_causal_mask(attn_weights: te.Tensor):
+            b, h, s, t = attn_weights.shape
+            return te.compute(
+                (b, h, s, t),
+                lambda b, h, i, j: tir.Select(
+                    j <= t - s + i, attn_weights[b, h, i, j], tir.min_value(attn_weights.dtype)
+                ),
+                name="apply_causal_mask",
+            )
+
+        def _discard_obs_window(attn_weights: te.Tensor):
+            b, h, s, t = attn_weights.shape
+            return te.compute(
+                (b, h, s, t - s), lambda *idx: attn_weights[*idx], name="discard_obs_window"
+            )
+
+        def _avg_pool1d(attn_weights_sum: Tensor, kernel_size: int):
+
+            pooling_res = relax.op.nn.avg_pool1d(
+                attn_weights_sum._expr, pool_size=kernel_size, strides=1, padding=kernel_size // 2
+            )
+            return op.wrap_nested(pooling_res, name="avg_pool1d")
+
+        def _take_compressed_kv(kv_full: te.Tensor, indices: te.Tensor):
+            b, h, num = indices.shape
+            d = kv_full.shape[-1]
+            return te.compute(
+                (b, num, h, d),
+                lambda b, i, h, d: kv_full[b, indices[b, h, i], h, d],
+                name="take_compressed_kv",
+            )
+
+        b, s, _, _ = qkv.shape
+        h_q, h_kv, d = self.num_q_heads, self.num_kv_heads, self.head_dim
+        q_obs, k_obs, v_obs = paged_kv_cache.get_last_qkv(b, s, h_q, h_kv, d, qkv.dtype)
+        k_obs = Tensor(
+            _expr=relax.BlockBuilder.current().match_cast(
+                k_obs._expr, relax.TensorStructInfo((b, obs_window_size, h_kv, d), qkv.dtype)
+            )
+        )
+        v_obs = Tensor(
+            _expr=relax.BlockBuilder.current().match_cast(
+                v_obs._expr, relax.TensorStructInfo((b, obs_window_size, h_kv, d), qkv.dtype)
+            )
+        )
+
+        k_full, v_full = paged_kv_cache.get_compact_kv(
+            seq_id, layer_id, b, context_length, h_kv, d, qkv.dtype
+        )
+        if h_kv != h_q:
+            k_full_repeated = k_full.repeat(h_q // h_kv, axis=2)
+
+        q_obs = op.permute_dims(q_obs, [0, 2, 1, 3])
+        k_full_repeated = op.permute_dims(k_full_repeated, [0, 2, 1, 3])
+        attn_weights = op.matmul(  # [b, h, s, t]
+            q_obs,  # [b, h, s, d]
+            op.permute_dims(k_full_repeated, [0, 1, 3, 2]),  # [b, h, d, t]
+            out_dtype="float32",
+        ) / math.sqrt(d)
+        attn_weights = op.tensor_expr_op(
+            _apply_causal_mask, "apply_causal_mask", args=[attn_weights]
+        )
+        attn_weights = op.softmax(attn_weights, axis=-1).astype(qkv.dtype)
+        attn_weights = op.tensor_expr_op(
+            _discard_obs_window, "discard_obs_window", args=[attn_weights]
+        )
+        attn_weights_sum = op.sum(attn_weights, axis=2)
+        attn_cache = _avg_pool1d(attn_weights_sum, kernel_size=3)
+        attn_cache = attn_cache.reshape(b, h_kv, h_q // h_kv, attn_cache.shape[-1])
+        attn_cache = op.sum(attn_cache, axis=2)
+        top_nums = draft_budget - obs_window_size
+        topk_indices = op.topk(attn_cache, k=top_nums, ret_type="indices")
+        k_past_compress = op.tensor_expr_op(
+            _take_compressed_kv, "take_compressed_kv", args=[k_full, topk_indices]
+        )
+        v_past_compress = op.tensor_expr_op(
+            _take_compressed_kv, "take_compressed_kv", args=[v_full, topk_indices]
+        )
+        k_draft = op.concat([k_past_compress, k_obs], dim=1)
+        v_draft = op.concat([v_past_compress, v_obs], dim=1)
+        output = snap_kv_draft_model_kv_cache.append_kv_with_output(
+            layer_id, k_draft, v_draft, context_length, output
+        )
+        return output
 
 
 class LlamaDecoderLayer(nn.Module):
@@ -195,8 +319,23 @@ class LlamaDecoderLayer(nn.Module):
         self.tensor_parallel_shards = config.tensor_parallel_shards
         _set_tp()
 
-    def forward(self, hidden_states: Tensor, paged_kv_cache: PagedKVCache, layer_id: int):
-        out = self.self_attn(self.input_layernorm(hidden_states), paged_kv_cache, layer_id)
+    def forward(
+        self,
+        hidden_states: Tensor,
+        paged_kv_cache: PagedKVCache,
+        layer_id: int,
+        snap_kv_draft_model_kv_cache: Optional[PagedKVCache] = None,
+        context_length: Optional[tir.PrimExpr] = None,
+        seq_id: Optional[tir.PrimExpr] = None,
+    ):
+        out = self.self_attn(
+            self.input_layernorm(hidden_states),
+            paged_kv_cache,
+            layer_id,
+            snap_kv_draft_model_kv_cache,
+            context_length,
+            seq_id,
+        )
         hidden_states = self._apply_residual(out, residual=hidden_states)
         out = self.mlp(self.post_attention_layernorm(hidden_states))
         hidden_states = self._apply_residual(out, residual=hidden_states)
@@ -228,12 +367,26 @@ class LlamaModel(nn.Module):
             i * layers_per_stage for i in range(config.pipeline_parallel_stages)
         ] + [config.num_hidden_layers]
 
-    def forward(self, input_embed: Tensor, paged_kv_cache: PagedKVCache):
+    def forward(
+        self,
+        input_embed: Tensor,
+        paged_kv_cache: PagedKVCache,
+        snap_kv_draft_model_kv_cache: Optional[PagedKVCache] = None,
+        context_length: Optional[tir.PrimExpr] = None,
+        seq_id: Optional[tir.PrimExpr] = None,
+    ):
         hidden_states = input_embed
         for layer_id, layer in enumerate(self.layers):
             if layer_id != 0 and layer_id in self.layer_partition:
                 hidden_states = op_ext.pipeline_stage_boundary(hidden_states)
-            hidden_states = layer(hidden_states, paged_kv_cache, layer_id)
+            hidden_states = layer(
+                hidden_states,
+                paged_kv_cache,
+                layer_id,
+                snap_kv_draft_model_kv_cache,
+                context_length,
+                seq_id,
+            )
         hidden_states = self.norm(hidden_states)
         return hidden_states
 
@@ -335,6 +488,27 @@ class LlamaForCausalLM(nn.Module):  # pylint: disable=too-many-instance-attribut
         hidden_states = op.tensor_expr_op(_index, name_hint="index", args=[hidden_states])
         logits = self.get_logits(hidden_states)
         return logits, paged_kv_cache
+
+    def prefill_snap_kv(
+        self,
+        input_embed: Tensor,
+        paged_kv_cache: PagedKVCache,
+        snap_kv_draft_model_kv_cache: PagedKVCache,
+        context_length: tir.PrimExpr,
+        seq_id: tir.PrimExpr,
+    ):
+        op_ext.configure()
+
+        def _index(x: te.Tensor):  # x[:-1,:]
+            b, s, d = x.shape
+            return te.compute((b, 1, d), lambda i, _, k: x[i, s - 1, k], name="index")
+
+        hidden_states = self.model(
+            input_embed, paged_kv_cache, snap_kv_draft_model_kv_cache, context_length, seq_id
+        )
+        hidden_states = op.tensor_expr_op(_index, name_hint="index", args=[hidden_states])
+        logits = self.get_logits(hidden_states)
+        return logits, paged_kv_cache, snap_kv_draft_model_kv_cache
 
     def decode(self, input_embed: Tensor, paged_kv_cache: PagedKVCache):
         op_ext.configure()
@@ -440,6 +614,18 @@ class LlamaForCausalLM(nn.Module):  # pylint: disable=too-many-instance-attribut
             "prefill": {
                 "input_embed": nn.spec.Tensor([1, "seq_len", self.hidden_size], self.dtype),
                 "paged_kv_cache": nn.spec.Object(object_type=PagedKVCache),
+                "$": {
+                    "param_mode": "packed",
+                    "effect_mode": "none",
+                },
+            },
+            "prefill_snap_kv": {
+                # Observation window size 32
+                "input_embed": nn.spec.Tensor([1, "obs_window_size", self.hidden_size], self.dtype),
+                "paged_kv_cache": nn.spec.Object(object_type=PagedKVCache),
+                "snap_kv_draft_model_kv_cache": nn.spec.Object(object_type=PagedKVCache),
+                "context_length": int,
+                "seq_id": int,
                 "$": {
                     "param_mode": "packed",
                     "effect_mode": "none",

@@ -188,7 +188,7 @@ struct EngineMetrics {
   SpecDecodeMetrics spec_decode;
 
   /*! \brief The maximum batch size we track for batch decode time. */
-  static constexpr const int64_t kEndFineGrainedTrackingBatchSize = 65;
+  static constexpr const int64_t kEndFineGrainedTrackingBatchSize = 1300;
   /*! \brief The list of batch decode time under different batch size. */
   std::vector<TimeCost> decode_time_by_batch_size =
       std::vector<TimeCost>(kEndFineGrainedTrackingBatchSize);

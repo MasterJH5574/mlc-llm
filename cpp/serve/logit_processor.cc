@@ -66,12 +66,12 @@ class LogitProcessorImpl : public LogitProcessorObj {
     temperature_host_ = NDArray::Empty({max_num_token}, dtype_f32_, preferred_host_device);
     // Initialize auxiliary arrays on GPU.
     seq_ids_device_ = NDArray::Empty({max_num_token}, dtype_i32_, device);
-    pos2seq_id_device_ = NDArray::Empty({max_num_token * vocab_size}, dtype_i32_, device);
-    token_ids_device_ = NDArray::Empty({max_num_token * vocab_size}, dtype_i32_, device);
-    token_cnt_device_ = NDArray::Empty({max_num_token * vocab_size}, dtype_i32_, device);
-    token_logit_bias_device_ = NDArray::Empty({max_num_token * vocab_size}, dtype_f32_, device);
-    penalties_device_ = NDArray::Empty({max_num_token, 3}, dtype_f32_, device);
-    bitmask_device_ = NDArray::Empty({max_num_token, bitmask_size_}, dtype_i32_, device);
+    // pos2seq_id_device_ = NDArray::Empty({max_num_token * vocab_size}, dtype_i32_, device);
+    // token_ids_device_ = NDArray::Empty({max_num_token * vocab_size}, dtype_i32_, device);
+    // token_cnt_device_ = NDArray::Empty({max_num_token * vocab_size}, dtype_i32_, device);
+    // token_logit_bias_device_ = NDArray::Empty({max_num_token * vocab_size}, dtype_f32_, device);
+    // penalties_device_ = NDArray::Empty({max_num_token, 3}, dtype_f32_, device);
+    // bitmask_device_ = NDArray::Empty({max_num_token, bitmask_size_}, dtype_i32_, device);
     temperature_device_ = NDArray::Empty({max_num_token}, dtype_f32_, device);
 
     CHECK(apply_logit_bias_func_.defined())

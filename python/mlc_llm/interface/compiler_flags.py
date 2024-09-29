@@ -202,6 +202,7 @@ OPT_FLAG_PRESET = {
         faster_transformer=False,
         cudagraph=True,
         cutlass=True,
+        ipc_allreduce_strategy=IPCAllReduceStrategyType.AUTO,
     ),
     "O3": OptimizationFlags(
         flashinfer=True,

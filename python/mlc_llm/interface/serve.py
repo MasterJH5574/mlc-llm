@@ -36,7 +36,7 @@ def serve(
     attention_sink_size: Optional[int],
     max_history_size: Optional[int],
     gpu_memory_utilization: Optional[float],
-    speculative_mode: Literal["disable", "small_draft", "eagle", "medusa"],
+    speculative_mode: Literal["disable", "small_draft", "eagle", "medusa", "magic_dec2"],
     spec_draft_length: Optional[int],
     spec_tree_width: Optional[int],
     prefix_cache_mode: Literal["disable", "radix"],

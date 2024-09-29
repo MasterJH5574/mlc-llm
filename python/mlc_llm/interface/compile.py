@@ -110,12 +110,16 @@ def _compile(args: CompileArgs, model_config: ConfigBase):
                 "rolling_cache_len": model_config.sliding_window_size,
                 "kv_seq_len": model_config.sliding_window_size + model_config.prefill_chunk_size,
                 "seq_len": model_config.prefill_chunk_size,
-                "batch_size": getattr(model_config, "max_batch_size", 1),
+                "context_length": 101000,
+                "obs_window_size": 32,
+                "batch_size": 640,
             }
         return {
             "total_seq_len": model_config.context_window_size,
             "seq_len": model_config.prefill_chunk_size,
-            "batch_size": getattr(model_config, "max_batch_size", 1),
+            "context_length": 101000,
+            "obs_window_size": 32,
+            "batch_size": 640,
         }
 
     def _get_param_metadata(name: str, param: nn.Parameter) -> Dict[str, Any]:

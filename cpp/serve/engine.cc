@@ -373,9 +373,12 @@ class EngineImpl : public Engine {
       model->LoadParams();
       model->SetMaxNumSequence(engine_config->max_num_sequence);
       model->SetPrefillChunkSize(engine_config->prefill_chunk_size);
+      int draft_kv_cache_budget =
+          engine_config->speculative_mode == SpeculativeMode::kMagicDec2 ? 4200 : 0;
       model->CreateKVCache(engine_config->kv_cache_page_size, engine_config->max_num_sequence,
                            engine_config->max_total_sequence_length,
-                           engine_config->prefill_chunk_size, engine_config->max_history_size);
+                           engine_config->prefill_chunk_size, engine_config->max_history_size,
+                           draft_kv_cache_budget);
       n->model_workspaces_.push_back(
           ModelWorkspace{model->AllocEmbeddingTensor(), model->AllocHiddenStatesTensor()});
     }
@@ -385,7 +388,7 @@ class EngineImpl : public Engine {
     n->grammar_init_context_cache_ = GrammarInitContextCache(n->token_table_);
     // - Create the logit processor and sampler, and
     // the DraftTokenWorkspaceManager for speculative decoding.
-    int max_num_tokens = engine_config->max_num_sequence;
+    int max_num_tokens = engine_config->max_num_sequence * (engine_config->spec_draft_length + 1);
     DraftTokenWorkspaceManager draft_token_workspace_manager{nullptr};
     if (engine_config->speculative_mode != SpeculativeMode::kDisable) {
       // multiply max num_tokens by two so we can do ping-pong swaping during draft/verify process
@@ -499,8 +502,10 @@ class EngineImpl : public Engine {
         GetGrammarInitCtxFromResponseFormat(request->generation_cfg->response_format);
 
     std::vector<RequestStateEntry> rsentries;
+    int num_mstates =
+        engine_config_->speculative_mode == SpeculativeMode::kMagicDec2 ? 2 : models_.size();
     // Create the request state entry for the input.
-    rsentries.emplace_back(request, models_.size(), estate_->id_manager.GetNewId(), rng_seed,
+    rsentries.emplace_back(request, num_mstates, estate_->id_manager.GetNewId(), rng_seed,
                            token_table_, grammar_state_init_ctx);
     if (n > 1) {
       // Then create a request state entry for each parallel generation branch.
@@ -509,7 +514,7 @@ class EngineImpl : public Engine {
       rsentries[0]->child_indices.reserve(n);
       for (int i = 0; i < n; ++i) {
         rsentries[0]->child_indices.push_back(rsentries.size());
-        rsentries.emplace_back(request, models_.size(), estate_->id_manager.GetNewId(),
+        rsentries.emplace_back(request, num_mstates, estate_->id_manager.GetNewId(),
                                rng_seed + i + 1, token_table_, grammar_state_init_ctx,
                                /*parent_idx=*/0);
       }

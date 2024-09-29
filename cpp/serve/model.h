@@ -153,6 +153,9 @@ class ModelObj : public Object {
   virtual NDArray BatchPrefill(const ObjectRef& embeddings, const std::vector<int64_t>& seq_ids,
                                const std::vector<int>& lengths) = 0;
 
+  virtual NDArray PrefillSnapKV(const ObjectRef& embeddings, int64_t seq_id, int length,
+                                int context_length) = 0;
+
   /*!
    * \brief Batch prefill function. Input hidden_states are computed from
    * input embeddings and previous hidden_states, output last hidden_states.
@@ -240,7 +243,8 @@ class ModelObj : public Object {
    * The KV cache does not need this.
    */
   virtual void CreateKVCache(int page_size, int max_num_sequence, int64_t max_total_sequence_length,
-                             int64_t prefill_chunk_size, int max_history_size) = 0;
+                             int64_t prefill_chunk_size, int max_history_size,
+                             int draft_kv_cache_budget) = 0;
 
   /*! \brief Add a new sequence with the given sequence id to the KV cache. */
   virtual void AddNewSequence(int64_t seq_id) = 0;
@@ -356,6 +360,8 @@ class ModelObj : public Object {
 
   /*! \brief Call the given global function on all workers. Only for debug purpose. */
   virtual void DebugCallFuncOnAllAllWorker(const String& func_name) = 0;
+
+  virtual Model CopyToDraftModel() = 0;
 
   static constexpr const char* _type_key = "mlc.serve.Model";
   static constexpr const bool _type_has_method_sequal_reduce = false;

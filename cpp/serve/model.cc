@@ -74,6 +74,20 @@ class ModelImpl : public ModelObj {
     this->kind = GetMetadata().kv_state_kind;
   }
 
+  Model CopyToDraftModel() final {
+    CHECK(draft_kv_cache_.defined()) << "Model without a draft kv cache cannot be copied.";
+    ObjectPtr<ModelImpl> p_draft_model = make_object<ModelImpl>(*this);
+    p_draft_model->kv_cache_ = p_draft_model->draft_kv_cache_;
+    p_draft_model->local_kv_cache_ =
+        ft_.use_disco ? Downcast<DRef>(p_draft_model->kv_cache_)->DebugGetFromRemote(0)
+                      : p_draft_model->kv_cache_;
+    p_draft_model->draft_kv_cache_ = ObjectRef{nullptr};
+    p_draft_model->SetMaxNumSequence(max_num_sequence_);
+    p_draft_model->SetPrefillChunkSize(prefill_chunk_size_);
+
+    return Model(p_draft_model);
+  }
+
   /*********************** Model Computation  ***********************/
 
   ObjectRef TokenEmbed(IntTuple token_ids, ObjectRef* dst, int offset) final {
@@ -286,6 +300,65 @@ class ModelImpl : public ModelObj {
     ICHECK_EQ(logits->ndim, 3);
     ICHECK_EQ(logits->shape[0], 1);
     ICHECK_EQ(logits->shape[1], num_sequences);
+    return logits;
+  }
+
+  NDArray PrefillSnapKV(const ObjectRef& embeddings, int64_t seq_id, int length,
+                        int context_length) final {
+    NVTXScopedRange nvtx_scope("PrefillSnapKV length=" + std::to_string(length));
+
+    CHECK(ft_.single_prefill_snap_kv_func_.defined());
+    ICHECK(ft_.kv_cache_begin_forward_func_.defined());
+    ICHECK(ft_.kv_cache_end_forward_func_.defined());
+    ICHECK(kv_cache_.defined()) << "KV cache has not been initialized.";
+    ICHECK(draft_kv_cache_.defined()) << "Draft KV cache has not been initialized.";
+
+    // Begin forward with the sequence ids and new lengths.
+    IntTuple seq_ids_tuple{seq_id};
+    IntTuple lengths_tuple{length};
+    IntTuple draft_lengths_tuple{2048};
+    ft_.kv_cache_begin_forward_func_(kv_cache_, seq_ids_tuple, lengths_tuple);
+    ft_.kv_cache_begin_forward_func_(draft_kv_cache_, seq_ids_tuple, draft_lengths_tuple);
+
+    ObjectRef embeddings_dref_or_nd;
+    if (!embeddings->IsInstance<DRefObj>()) {
+      // embeddings: (1, n, h)
+      NDArray embeddings_nd = Downcast<NDArray>(embeddings);
+      ICHECK_NE(hidden_size_, -1);
+      ICHECK_EQ(embeddings_nd->ndim, 2);
+      ICHECK_GE(embeddings_nd->shape[0], length);
+      ICHECK_EQ(embeddings_nd->shape[1], hidden_size_);
+      ICHECK_EQ(embeddings_nd->device.device_type, device_.device_type);
+      ICHECK_EQ(embeddings_nd->device.device_id, device_.device_id);
+      embeddings_dref_or_nd =
+          embeddings_nd.CreateView({1, length, hidden_size_}, embeddings_nd->dtype);
+    } else {
+      ShapeTuple embedding_shape{1, length, hidden_size_};
+      embeddings_dref_or_nd = ft_.nd_view_func_(embeddings, embedding_shape);
+    }
+    // args: embeddings, logit_pos, kv_cache, params
+    ObjectRef ret;
+    IntTuple context_length_tuple{context_length};
+    ret = ft_.single_prefill_snap_kv_func_(embeddings_dref_or_nd, kv_cache_, draft_kv_cache_,
+                                           context_length_tuple, seq_ids_tuple, params_);
+    NDArray logits;
+    if (ft_.use_disco) {
+      ret = ft_.tuple_getitem_func_(ret, 0);
+      CHECK_EQ(num_stages_, 1) << "Pipeline parallelism not supported yet.";
+      logits = Downcast<DRef>(ret)->DebugGetFromRemote(0);
+    } else {
+      logits = Downcast<Array<NDArray>>(ret)[0];
+    }
+    if (trace_enabled_) {
+      TVMSynchronize(device_.device_type, device_.device_id, nullptr);
+    }
+    ft_.kv_cache_end_forward_func_(kv_cache_);
+    ft_.kv_cache_end_forward_func_(draft_kv_cache_);
+
+    // logits: (1, 1, v)
+    ICHECK_EQ(logits->ndim, 3);
+    ICHECK_EQ(logits->shape[0], 1);
+    ICHECK_EQ(logits->shape[1], 1);
     return logits;
   }
 
@@ -681,7 +754,8 @@ class ModelImpl : public ModelObj {
   /*********************** KV Cache Management  ***********************/
 
   void CreateKVCache(int page_size, int max_num_sequence, int64_t max_total_sequence_length,
-                     int64_t prefill_chunk_size, int max_history_size) final {
+                     int64_t prefill_chunk_size, int max_history_size,
+                     int draft_kv_cache_budget) final {
     KVStateKind kv_state_kind = GetMetadata().kv_state_kind;
     if (kv_state_kind == KVStateKind::kKVCache) {
       IntTuple max_num_sequence_tuple{max_num_sequence};
@@ -694,6 +768,12 @@ class ModelImpl : public ModelObj {
                                             support_sliding_window);
       local_kv_cache_ =
           ft_.use_disco ? Downcast<DRef>(kv_cache_)->DebugGetFromRemote(0) : kv_cache_;
+      if (draft_kv_cache_budget != 0) {
+        max_total_sequence_length_tuple = {draft_kv_cache_budget * max_num_sequence};
+        draft_kv_cache_ = ft_.create_kv_cache_func_(
+            max_num_sequence_tuple, max_total_sequence_length_tuple, prefill_chunk_size_tuple,
+            page_size_tuple, support_sliding_window);
+      }
     } else if (kv_state_kind == KVStateKind::kRNNState) {
       IntTuple max_num_sequence_tuple{max_num_sequence};
       IntTuple max_history_size_tuple = {std::max(max_history_size, 1)};
@@ -712,6 +792,9 @@ class ModelImpl : public ModelObj {
       return;
     }
     ft_.kv_cache_add_sequence_func_(kv_cache_, seq_id);
+    if (draft_kv_cache_.defined()) {
+      ft_.kv_cache_add_sequence_func_(draft_kv_cache_, seq_id);
+    }
   }
 
   void ForkSequence(int64_t parent_seq_id, int64_t child_seq_id, int64_t fork_pos) final {
@@ -726,6 +809,9 @@ class ModelImpl : public ModelObj {
       return;
     }
     ft_.kv_cache_remove_sequence_func_(kv_cache_, seq_id);
+    if (draft_kv_cache_.defined()) {
+      ft_.kv_cache_remove_sequence_func_(draft_kv_cache_, seq_id);
+    }
   }
 
   void PopNFromKVCache(int64_t seq_id, int num_tokens) final {
@@ -783,7 +869,7 @@ class ModelImpl : public ModelObj {
   void SetMaxNumSequence(int max_num_sequence) final {
     this->max_num_sequence_ = max_num_sequence;
     this->logit_pos_arr_ =
-        NDArray::Empty({max_num_sequence}, DataType::Int(32), Device{DLDeviceType::kDLCPU, 0});
+        NDArray::Empty({max_num_sequence * 10}, DataType::Int(32), Device{DLDeviceType::kDLCPU, 0});
   }
 
   void SetPrefillChunkSize(int prefill_chunk_size) final {
@@ -848,10 +934,11 @@ class ModelImpl : public ModelObj {
     ICHECK_EQ(embedding_shape.size(), 2);
     ICHECK_GE(embedding_shape[0], prefill_chunk_size_);
     this->hidden_size_ = embedding_shape[1];
-    return embedding;
+    return !draft_kv_cache_.defined() ? embedding : ObjectRef{nullptr};
   }
 
   ObjectRef AllocHiddenStatesTensor() final {
+    return ObjectRef{nullptr};
     if (!ft_.alloc_embedding_tensor_func_.defined()) {
       return ObjectRef{nullptr};
     }
@@ -926,8 +1013,8 @@ class ModelImpl : public ModelObj {
         logit_pos_arr_.CreateView({static_cast<int64_t>(indices.size())}, DataType::Int(32));
     indices_nd.CopyFromBytes(indices.data(), indices.size() * sizeof(int));
     ICHECK_NE(max_num_sequence_, -1);
-    ObjectRef indices_device =
-        ft_.CopyToWorker0(indices_nd, "logit_pos_local", {max_num_sequence_}, /*local_only=*/true);
+    ObjectRef indices_device = ft_.CopyToWorker0(indices_nd, "logit_pos_local",
+                                                 {max_num_sequence_ * 10}, /*local_only=*/true);
     ft_.gather_probs_func_(input, indices_device, dst_view);
     return dst_view;
   }
@@ -938,8 +1025,8 @@ class ModelImpl : public ModelObj {
         logit_pos_arr_.CreateView({static_cast<int64_t>(indices.size())}, DataType::Int(32));
     indices_nd.CopyFromBytes(indices.data(), indices.size() * sizeof(int));
     ICHECK_NE(max_num_sequence_, -1);
-    ObjectRef indices_device =
-        ft_.CopyToWorker0(indices_nd, "logit_pos_local", {max_num_sequence_}, /*local_only=*/true);
+    ObjectRef indices_device = ft_.CopyToWorker0(indices_nd, "logit_pos_local",
+                                                 {max_num_sequence_ * 10}, /*local_only=*/true);
     ft_.scatter_probs_func_(input, indices_device, *dst);
   }
 
@@ -1000,6 +1087,7 @@ class ModelImpl : public ModelObj {
   // except that it is always a local object.
   ObjectRef kv_cache_{nullptr};
   ObjectRef local_kv_cache_{nullptr};
+  ObjectRef draft_kv_cache_{nullptr};
   // Runtime device
   Device device_;
   // Model parameters

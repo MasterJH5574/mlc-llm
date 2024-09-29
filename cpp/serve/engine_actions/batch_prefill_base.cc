@@ -280,8 +280,7 @@ bool BatchPrefillBaseActionObj::CanPrefill(EngineState estate, int num_prefill_r
                         ? (estate->spec_draft_length + 1)
                         : 1;
   if ((num_running_rsentries + num_prefill_rsentries) * spec_factor >
-      std::min(static_cast<int64_t>(engine_config_->max_num_sequence),
-               engine_config_->prefill_chunk_size)) {
+      engine_config_->prefill_chunk_size) {
     return false;
   }
 

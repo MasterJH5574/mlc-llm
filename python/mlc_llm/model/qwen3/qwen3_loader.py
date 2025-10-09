@@ -42,7 +42,7 @@ def huggingface(model_config: Qwen3Config, quantization: Quantization) -> Extern
                 "The input Qwen3 model is not fp8 block quantized. "
                 "Thus BlockScaleQuantize is not supported."
             )
-    megakernel = model_config.kwargs.get("megakernel", False)     
+    interleave_gate_up = model_config.kwargs.get("interleave_gate_up", False)     
     _, _named_params, _ = model.export_tvm(  # type: ignore[misc]
         spec=model.get_default_spec(),
         allow_extern=True,
@@ -135,7 +135,7 @@ def huggingface(model_config: Qwen3Config, quantization: Quantization) -> Extern
                 f"{mlp}.gate_proj.weight",
                 f"{mlp}.up_proj.weight",
             ],
-            interleave_gate_up_weights(interleave=(megakernel and model_config.tensor_parallel_shards == 1)),
+            interleave_gate_up_weights(interleave=interleave_gate_up),
         )
 
     for mlc_name, mlc_param in named_parameters.items():

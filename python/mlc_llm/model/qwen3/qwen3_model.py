@@ -181,7 +181,7 @@ class Qwen3MLP(nn.Module):
         self.gate_up_proj = nn.Linear(config.hidden_size, 2 * self.intermediate_size, bias=False)
         self.down_proj = nn.Linear(self.intermediate_size, config.hidden_size, bias=False)
         self.act_fn = ACT2FN[config.hidden_act]
-        self.interleave = config.kwargs.get("megakernel", False) and config.tensor_parallel_shards == 1
+        self.interleave = config.kwargs.get("interleave_gate_up", False)
         self.chunk_size = 16
 
     def forward(self, x: Tensor):

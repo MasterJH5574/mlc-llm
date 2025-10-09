@@ -10,7 +10,6 @@ from mlc_llm.interface.serve import serve
 from mlc_llm.support import argparse
 from mlc_llm.support.argparse import ArgumentParser
 from mlc_llm.support import logging
-import tvm.tirp.megakernel
 
 logger = logging.getLogger(__name__)
 

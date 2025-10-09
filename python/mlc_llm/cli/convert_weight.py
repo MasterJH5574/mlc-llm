@@ -71,7 +71,7 @@ def main(argv):
         help=HELP["source_format"] + ' (default: "%(default)s", choices: %(choices)s")',
     )
     parser.add_argument(
-        "--use-megakernel",
+        "--interleave-gate-up",
         action="store_true",
     )
     parser.add_argument(
@@ -96,6 +96,6 @@ def main(argv):
         device=parsed.device,
         source=parsed.source,
         source_format=parsed.source_format,
-        use_megakernel=parsed.use_megakernel,
+        interleave_gate_up=parsed.interleave_gate_up,
         output=parsed.output,
     )

@@ -35,7 +35,7 @@ class CompileArgs:  # pylint: disable=too-many-instance-attributes
     opt: OptimizationFlags
     build_func: Callable[[IRModule, "CompileArgs", Pass], None]
     system_lib_prefix: str
-    use_megakernel: bool
+    interleave_gate_up: bool
     output: Path
     overrides: ModelConfigOverride
     debug_dump: Optional[Path]
@@ -53,7 +53,7 @@ class CompileArgs:  # pylint: disable=too-many-instance-attributes
         print(f"  {bold('--target'):<25} {self.target.export()}", file=out)
         print(f"  {bold('--opt'):<25} {self.opt}", file=out)
         print(f"  {bold('--system-lib-prefix'):<25} \"{self.system_lib_prefix}\"", file=out)
-        print(f"  {bold('--use-megakernel'):<25} {self.use_megakernel}", file=out)
+        print(f"  {bold('--interleave_gate_up'):<25} {self.interleave_gate_up}", file=out)
         print(f"  {bold('--output'):<25} {self.output}", file=out)
         print(f"  {bold('--overrides'):<25} {self.overrides}", file=out)
         # As it's debug only, no need to display
@@ -131,8 +131,8 @@ def _compile(args: CompileArgs, model_config: ConfigBase):
         }
 
     model_config = args.overrides.apply(model_config)
-    if args.use_megakernel:
-        model_config.kwargs["megakernel"] = True
+    if args.interleave_gate_up:
+        model_config.kwargs["interleave_gate_up"] = True
     with args.target:
         op_ext.enable(
             target=args.target,
@@ -220,7 +220,7 @@ def compile(  # pylint: disable=too-many-arguments,redefined-builtin
     opt: OptimizationFlags,
     build_func: Callable[[IRModule, CompileArgs, Pass], None],
     system_lib_prefix: str,
-    use_megakernel: bool,
+    interleave_gate_up: bool,
     output: Path,
     overrides: ModelConfigOverride,
     debug_dump: Optional[Path] = None,
@@ -241,7 +241,7 @@ def compile(  # pylint: disable=too-many-arguments,redefined-builtin
         opt,
         build_func,
         system_lib_prefix,
-        use_megakernel,
+        interleave_gate_up,
         output,
         overrides,
         debug_dump,

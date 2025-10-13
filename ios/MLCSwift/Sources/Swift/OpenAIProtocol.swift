@@ -171,22 +171,31 @@ public struct ChatCompletionStreamResponseChoice: Codable {
 public struct CompletionUsageExtra: Codable {
     public var prefill_tokens_per_s: Optional<Float> = nil
     public var decode_tokens_per_s: Optional<Float> = nil
+    public var end_to_end_latency_s: Optional<Float> = nil
     public var num_prefill_tokens: Optional<Int> = nil
 
     public func asTextLabel() -> String {
         var outputText = ""
         if let prefill_tokens_per_s = self.prefill_tokens_per_s {
             outputText += "prefill: "
-            outputText += String(format: "%.1f", prefill_tokens_per_s)
-            outputText += " tok/s"
+            outputText += String(format: "%.3f", 1.0 / prefill_tokens_per_s)
+            outputText += " s/tok"
         }
         if let decode_tokens_per_s = self.decode_tokens_per_s {
             if !outputText.isEmpty {
                 outputText += ", "
             }
             outputText += "decode: "
-            outputText += String(format: "%.1f", decode_tokens_per_s)
-            outputText += " tok/s"
+            outputText += String(format: "%.3f", 1.0 / decode_tokens_per_s)
+            outputText += " s/tok"
+        }
+        if let end_to_end_latency_s = self.end_to_end_latency_s {
+            if !outputText.isEmpty {
+                outputText += ", "
+            }
+            outputText += "e2e: "
+            outputText += String(format: "%.1f", end_to_end_latency_s)
+            outputText += " s"
         }
         return outputText
     }

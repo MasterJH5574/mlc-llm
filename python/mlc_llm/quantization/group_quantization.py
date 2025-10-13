@@ -370,6 +370,9 @@ class GroupQuantizeLinear(nn.Module):  # pylint: disable=too-many-instance-attri
             shard = src.weight.attrs["shard_strategy"]
             apply_sharding(shard, f"{shard.name}_q_weight", quantized_linear.q_weight)
             apply_sharding(shard, f"{shard.name}_q_scale", quantized_linear.q_scale)
+        if "pipeline_stages" in src.weight.attrs:
+            quantized_linear.q_weight.attrs["pipeline_stages"] = src.weight.attrs["pipeline_stages"]
+            quantized_linear.q_scale.attrs["pipeline_stages"] = src.weight.attrs["pipeline_stages"]
         return quantized_linear
 
     def forward(self, x: nn.Tensor) -> nn.Tensor:  # pylint: disable=invalid-name
@@ -466,7 +469,11 @@ class GroupQuantizeEmbedding(nn.Module):
             The group quantized GroupQuantizeEmbedding layer.
         """
         num, dim = embedding.weight.shape
-        return GroupQuantizeEmbedding(num, dim, config)
+        new_embedding = GroupQuantizeEmbedding(num, dim, config)
+        if "pipeline_stages" in embedding.weight.attrs:
+            new_embedding.q_weight.attrs["pipeline_stages"] = embedding.weight.attrs["pipeline_stages"]
+            new_embedding.q_scale.attrs["pipeline_stages"] = embedding.weight.attrs["pipeline_stages"]
+        return new_embedding
 
     def forward(self, x: nn.Tensor):  # pylint: disable=invalid-name
         """

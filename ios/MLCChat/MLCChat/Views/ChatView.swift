@@ -28,7 +28,7 @@ struct ChatView: View {
             uploadImageView
             messageInputView
         }
-        .navigationBarTitle("MLC Chat: \(chatState.displayName)", displayMode: .inline)
+        .navigationBarTitle(chatState.displayName, displayMode: .inline)
         .navigationBarBackButtonHidden()
         .onChange(of: scenePhase) { oldPhase, newPhase in
             if newPhase == .background {
@@ -45,15 +45,15 @@ struct ChatView: View {
                 .buttonStyle(.borderless)
                 .disabled(!chatState.isInterruptible)
             }
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button("Reset") {
-                    image = nil
-                    imageConfirmed = false
-                    chatState.requestResetChat()
-                }
-                .padding()
-                .disabled(!chatState.isResettable)
-            }
+            // ToolbarItem(placement: .navigationBarTrailing) {
+            //     Button("Reset") {
+            //         image = nil
+            //         imageConfirmed = false
+            //         chatState.requestResetChat()
+            //     }
+            //     .padding()
+            //     .disabled(!chatState.isResettable)
+            // }
         }
 
     }

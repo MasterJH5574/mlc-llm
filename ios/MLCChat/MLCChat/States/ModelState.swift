@@ -79,7 +79,10 @@ final class ModelState: ObservableObject, Identifiable {
             modelLib: modelConfig.modelLib!,
             modelPath: modelLocalBaseURL.path(),
             estimatedVRAMReq: modelConfig.estimatedVRAMReq!,
-            displayName: modelConfig.modelID!.components(separatedBy: "-")[0]
+            displayName: {
+                let components = modelConfig.modelID!.components(separatedBy: "-")
+                return components.enumerated().filter { $0.offset != components.count - 2 }.map { $0.element }.joined(separator: "-")
+            }()
         )
     }
 

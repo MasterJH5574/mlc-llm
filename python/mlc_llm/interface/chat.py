@@ -228,8 +228,8 @@ class ChatState:
                 return "N/A"
             prefill_speed = last_finished_request.get("prefill_tokens_per_s", None)
             decode_speed = last_finished_request.get("decode_tokens_per_s", None)
-            prefill_speed = f"{prefill_speed:.1f}" if prefill_speed is not None else "N/A"
-            decode_speed = f"{decode_speed:.1f}" if decode_speed is not None else "N/A"
+            prefill_speed = f"{prefill_speed:.3f}" if prefill_speed is not None else "N/A"
+            decode_speed = f"{decode_speed:.3f}" if decode_speed is not None else "N/A"
             return f"prefill: {prefill_speed} tok/s, decode: {decode_speed} tok/s"
 
         print(get_stats_text(), flush=True)

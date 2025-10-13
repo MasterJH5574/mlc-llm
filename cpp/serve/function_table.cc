@@ -7,6 +7,7 @@
 #include "function_table.h"
 
 #include <tvm/ffi/function.h>
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/runtime/disco/session.h>
 #include <tvm/runtime/memory/memory_manager.h>
 #include <tvm/runtime/module.h>
@@ -16,6 +17,7 @@
 #include <filesystem>
 #include <string>
 #include <vector>
+#include <chrono>
 
 #include "../support/load_bytes_from_file.h"
 #include "../support/utils.h"
@@ -66,6 +68,7 @@ Function FunctionTable::SessionFuncAsPackedFunc(Session sess, DRef sess_func, St
 
 void FunctionTable::Init(String reload_lib_path, Device device, picojson::object model_config,
                          Optional<Session> session, int num_shards, int num_stages) {
+  FunctionTable::Global(this);
   local_gpu_device = device;
   this->model_config = model_config;
   this->cached_buffers = Map<String, ObjectRef>();
@@ -145,7 +148,7 @@ void FunctionTable::Init(String reload_lib_path, Device device, picojson::object
     this->_InitFunctions();
   }
   ICHECK_EQ(this->model_metadata_.tensor_parallel_shards, num_shards);
-  ICHECK_EQ(this->model_metadata_.pipeline_parallel_stages, num_stages);
+  // ICHECK_EQ(this->model_metadata_.pipeline_parallel_stages, num_stages);
   // Invoke the CUDA graph allocation init function if it is defined.
   if (cuda_graph_alloc_init_func_.defined()) {
     this->cuda_graph_alloc_init_func_();
@@ -153,6 +156,9 @@ void FunctionTable::Init(String reload_lib_path, Device device, picojson::object
 }
 
 ObjectRef FunctionTable::LoadParams(const std::string& model_path, Device device) {
+  this->model_path = model_path;
+  this->params_.resize(this->model_metadata_.params.size());
+  return this->params_;
   if (this->use_disco) {
     Optional<DRef> params = std::nullopt;
     if (this->model_metadata_.params.empty()) {
@@ -202,6 +208,57 @@ ObjectRef FunctionTable::LoadParams(const std::string& model_path, Device device
     fclear_tensor_cache();
     return params;
   }
+}
+
+Array<Any> FunctionTable::ReloadParamsOnStage(int stage_id) {
+  // LOG(INFO) << "ReloadParamsOnStage " << stage_id << " starts at " << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+
+  // Release params
+  this->params_.clear();
+  this->params_ = Array<Any>();
+
+  // Get the required parameters on the specified stage.
+  CHECK(!this->model_metadata_.params.empty()) << "Model metadata is not initialized";
+  Array<String> param_names;
+  param_names.reserve(this->model_metadata_.params.size());
+  for (const auto& param : this->model_metadata_.params) {
+    if (std::find(param.pipeline_stages.begin(), param.pipeline_stages.end(), stage_id) ==
+        param.pipeline_stages.end()) {
+      continue;
+    }
+    param_names.push_back(param.name);
+  }
+
+  static Function fload_cache =
+      Function::GetGlobalRequired("vm.builtin.tensor_cache.load_by_names");
+  fload_cache(model_path, param_names, static_cast<int32_t>(local_gpu_device.device_type),
+              local_gpu_device.device_id);
+  static Function fload_params =
+      Function::GetGlobalRequired("vm.builtin.param_array_from_cache_by_name");
+
+  Array<Tensor> required_params;
+  required_params = fload_params(param_names).cast<Array<Tensor>>();
+  this->params_.reserve(this->model_metadata_.params.size());
+  auto param_it = required_params.begin();
+  for (const auto& param : this->model_metadata_.params) {
+    if (std::find(param.pipeline_stages.begin(), param.pipeline_stages.end(), stage_id) ==
+        param.pipeline_stages.end()) {
+      this->params_.push_back(Optional<Tensor>());
+    } else {
+      this->params_.push_back(*param_it);
+      ++param_it;
+    }
+  }
+
+  // after we get params, it is safe to simply clear the cached version
+  // as these params are referenced by params_
+  static Function fclear_tensor_cache =
+      Function::GetGlobalRequired("vm.builtin.tensor_cache.clear");
+  fclear_tensor_cache();
+
+  // LOG(INFO) << "ReloadParamsOnStage " << stage_id << " ends at " << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+
+  return this->params_;
 }
 
 void FunctionTable::_InitFunctions() {
@@ -361,6 +418,14 @@ void FunctionTable::DebugCallFuncOnAllAllWorker(const String& func_name,
       func();
     }
   }
+}
+
+TVM_FFI_STATIC_INIT_BLOCK() {
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef()
+      .def("mlc.reload_params_on_stage",
+           [](int stage_id) { return FunctionTable::Global()->ReloadParamsOnStage(stage_id); })
+      .def("mlc.fetch_params", []() { return FunctionTable::Global()->params_; });
 }
 
 }  // namespace serve

@@ -773,6 +773,8 @@ class EngineImpl : public Engine {
     auto f_get_num_shards_num_stages =
         [&device](const std::string& model_lib,
                   const picojson::object& model_config) -> std::pair<int, int> {
+      // For offloading, we set the number of shards and stages to 1.
+      return {1, 1};
       if (!StartsWith(model_lib, "system://")) {
         Module executable = ffi::Module::LoadFromFile(model_lib);
         Optional<Function> fload_exec = executable->GetFunction("vm_load_executable");
@@ -810,6 +812,8 @@ class EngineImpl : public Engine {
             << model_num_shards;
       }
     }
+    // Override the max number of stages to 1 for offloading.
+    max_num_stages = 1;
 
     Optional<Session> session = std::nullopt;
     int num_workers = num_shards * max_num_stages;

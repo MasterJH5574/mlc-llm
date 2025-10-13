@@ -244,6 +244,7 @@ private extension AppState {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             models.append(model)
+            models.sort { ($0.modelConfig.modelID ?? "") < ($1.modelConfig.modelID ?? "") }
         }
 
         if modelURL != nil && !isBuiltin {

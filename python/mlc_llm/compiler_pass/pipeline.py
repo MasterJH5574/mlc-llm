@@ -40,6 +40,7 @@ from .fuse_transpose_matmul import FuseTransposeMatmul
 from .lift_global_buffer_alloc import LiftTIRGlobalBufferAlloc
 from .low_batch_specialization import LowBatchGemvSpecialize
 from .pipeline_parallel_rewrite import PipelineParallelRewrite
+from .pipeline_to_param_reload import PipelineToParamLoadRewrite
 from .scatter_tuple_get_item import ScatterTupleGetItem
 
 logger = logging.getLogger(__name__)
@@ -136,6 +137,7 @@ def _mlc_llm_pipeline(  # pylint: disable=too-many-arguments
                 tvm.relax.backend.DispatchSampling(),
                 tvm.relax.backend.DispatchSortScan(),
                 tvm.relax.transform.LegalizeOps(),
+                _DebugDump("debug-phase1-1.py", debug_dump, show_meta=False),
                 tvm.relax.transform.AnnotateTIROpPattern(),
                 tvm.relax.transform.FoldConstant(),
                 tvm.relax.transform.FuseOps(),
@@ -150,7 +152,7 @@ def _mlc_llm_pipeline(  # pylint: disable=too-many-arguments
                 _DebugDump("debug-phase3.py", debug_dump, show_meta=False),
                 # Phase 4. Low-level Optimizations
                 _LogProgress("Running TVM Dlight low-level optimizations"),
-                LowBatchGemvSpecialize(),
+                # LowBatchGemvSpecialize(),
                 (
                     dl.ApplyDefaultSchedule(
                         dl.gpu.Matmul(),
@@ -177,7 +179,9 @@ def _mlc_llm_pipeline(  # pylint: disable=too-many-arguments
                     else tvm.transform.Sequential([])
                 ),
                 ScatterTupleGetItem(),
-                PipelineParallelRewrite(),
+                # PipelineParallelRewrite(),
+                PipelineToParamLoadRewrite(),
+                _DebugDump("debug-phase4-1.py", debug_dump, show_meta=False),
                 tvm.relax.transform.RewriteDataflowReshape(),
                 tvm.relax.transform.ToNonDataflow(),
                 tvm.relax.transform.RemovePurityChecking(),
@@ -198,6 +202,7 @@ def _mlc_llm_pipeline(  # pylint: disable=too-many-arguments
                 tvm.relax.transform.LowerRuntimeBuiltin(),
                 tvm.relax.transform.VMShapeLower(),
                 tvm.relax.transform.AttachGlobalSymbol(),
+                _DebugDump("debug-phase5-1.py", debug_dump, show_meta=False),
                 _LogProgress("Compiling external modules"),
                 tvm.relax.transform.AttachExternModules(ext_mods),
                 _LogProgress("Compilation complete! Exporting to disk"),

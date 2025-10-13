@@ -38,6 +38,7 @@ class Qwen3Config(ConfigBase):  # pylint: disable=too-many-instance-attributes
     context_window_size: int = 0
     prefill_chunk_size: int = 0
     tensor_parallel_shards: int = 1
+    pipeline_parallel_stages: int = 1
     head_dim: int = 0
     dtype: str = "float32"
     max_batch_size: int = 1
@@ -86,6 +87,13 @@ class Qwen3Config(ConfigBase):  # pylint: disable=too-many-instance-attributes
                     "`context_window_size`, `max_position_embeddings` or `max_sequence_length` is "
                     "provided in `config.json`."
                 )
+        if (
+            self.pipeline_parallel_stages <= 0
+            or self.pipeline_parallel_stages > self.num_hidden_layers
+        ):
+            raise ValueError(
+                f'Invalid "pipeline_parallel_stages" value ({self.pipeline_parallel_stages}). '
+            )
         if self.prefill_chunk_size == 0:
             logger.info(
                 "%s defaults to %d",
@@ -247,9 +255,18 @@ class Qwen3Model(nn.Module):
         )
         self.norm = nn.RMSNorm(config.hidden_size, -1, config.rms_norm_eps, bias=False)
 
+        self.layers_per_stage = (
+            config.num_hidden_layers + config.pipeline_parallel_stages - 1
+        ) // config.pipeline_parallel_stages
+        self.layer_partition = [
+            i * self.layers_per_stage for i in range(config.pipeline_parallel_stages)
+        ] + [config.num_hidden_layers]
+
     def forward(self, inputs: Tensor, paged_kv_cache: PagedKVCache):
         hidden_states = inputs
         for layer_id, layer in enumerate(self.layers):
+            if layer_id != 0 and layer_id in self.layer_partition:
+                hidden_states = op_ext.pipeline_stage_boundary(hidden_states)
             hidden_states = layer(hidden_states, paged_kv_cache, layer_id)
         hidden_states = self.norm(hidden_states)
         return hidden_states
@@ -273,6 +290,24 @@ class Qwen3LMHeadModel(nn.Module):  # pylint: disable=too-many-instance-attribut
         self.tensor_parallel_shards = config.tensor_parallel_shards
         self.head_dim = config.head_dim
         self.weight_block_size = config.weight_block_size
+
+        def _set_pp():
+            # hidden layers
+            for layer_id in range(config.num_hidden_layers):
+                stage = layer_id // self.model.layers_per_stage
+                for name, param in self.model.layers[layer_id].named_parameters():
+                    param.attrs["pipeline_stages"] = [stage]
+            # last stage
+            last_stage = config.pipeline_parallel_stages - 1
+            self.model.norm.weight.attrs["pipeline_stages"] = [last_stage]
+            # embedding table and lm_head is required by all stages
+            if not config.tie_word_embeddings:
+                self.model.embed_tokens.weight.attrs["pipeline_stages"] = [0]
+                self.lm_head.weight.attrs["pipeline_stages"] = [last_stage]
+            else:
+                self.model.embed_tokens.weight.attrs["pipeline_stages"] = [0, last_stage]
+
+        _set_pp()
 
     def to(self, dtype: Optional[str] = None):
         super().to(dtype=dtype)

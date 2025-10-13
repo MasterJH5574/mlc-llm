@@ -80,6 +80,7 @@ class ModelImpl : public ModelObj {
 
   ObjectRef TokenEmbed(IntTuple token_ids, ObjectRef* dst, int offset) final {
     NVTXScopedRange nvtx_scope("TokenEmbed");
+    ft_.ReloadParamsOnStage(/*stage_id=*/0);
     int num_tokens = token_ids.size();
     if (seqlen_padding_factor_ > 1) {
       num_tokens = (offset + num_tokens + seqlen_padding_factor_ - 1) / seqlen_padding_factor_ *
@@ -894,12 +895,12 @@ class ModelImpl : public ModelObj {
     token_ids_storage_ = memory::Storage(
         allocator->Alloc(preferred_host_device, {prefill_chunk_size_}, DataType::Int(32)),
         allocator);
-    if (this->num_stages_ > 1) {
-      // Create a remote Tensor for logits when pipeline parallelism is enabled.
-      disco_logits_arr_ =
-          ft_.Empty({prefill_chunk_size_, vocab_size_}, DataType::Float(32), device_,
-                    /*worker0_only=*/true);
-    }
+    // if (this->num_stages_ > 1) {
+    //   // Create a remote Tensor for logits when pipeline parallelism is enabled.
+    //   disco_logits_arr_ =
+    //       ft_.Empty({prefill_chunk_size_, vocab_size_}, DataType::Float(32), device_,
+    //                 /*worker0_only=*/true);
+    // }
   }
 
   LogitProcessor CreateLogitProcessor(int max_num_token,

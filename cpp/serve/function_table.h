@@ -26,6 +26,9 @@ namespace serve {
 
 using tvm::Device;
 using namespace tvm::runtime;
+using tvm::ffi::Any;
+using tvm::ffi::AnyView;
+using tvm::ffi::Array;
 using tvm::ffi::Function;
 using tvm::ffi::Map;
 using tvm::ffi::Optional;
@@ -46,12 +49,24 @@ using tvm::ffi::TypedFunction;
 // after the batching development becomes stable.
 //--------------------------------------------------------
 struct FunctionTable {
+  static FunctionTable* Global(FunctionTable* func_table = nullptr) {
+    static FunctionTable* inst;
+    if (func_table != nullptr) {
+      inst = func_table;
+    } else {
+      CHECK(inst != nullptr) << "Global FunctionTable is not initialized";
+    }
+    return inst;
+  }
+
   static Function SessionFuncAsPackedFunc(Session sess, DRef sess_func, String name);
 
   void Init(String reload_lib_path, Device device, picojson::object model_config,
             Optional<Session> session, int num_shards, int num_stages);
 
   ObjectRef LoadParams(const std::string& model_path, Device device);
+
+  Array<Any> ReloadParamsOnStage(int stage_id);
 
   void _InitFunctions();
 
@@ -73,6 +88,7 @@ struct FunctionTable {
   void DebugCallFuncOnAllAllWorker(const String& func_name, Optional<String> func_args) const;
 
   bool use_disco = false;
+  std::string model_path;
   Device local_gpu_device;
   Session sess{nullptr};
   Optional<DRef> disco_mod = std::nullopt;
@@ -84,6 +100,7 @@ struct FunctionTable {
   TypedFunction<Function(const std::string&)> get_global_func;
 
   ModelMetadata model_metadata_;
+  Array<Any> params_;
 
   Function embed_func_;
   Function image_embed_func_;

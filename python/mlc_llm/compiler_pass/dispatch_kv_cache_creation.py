@@ -196,6 +196,9 @@ class DispatchKVCacheCreation:  # pylint: disable=too-many-instance-attributes
             )
         ):
             return []
+        if "model_type" not in kwargs:
+            kwargs["model_type"] = tvm.script.tir.int64()
+
 
         max_batch_size = relax.Var(
             "max_batch_size_", relax.ShapeStructInfo([kwargs["max_batch_size"]])
@@ -210,6 +213,7 @@ class DispatchKVCacheCreation:  # pylint: disable=too-many-instance-attributes
         support_sliding_window = relax.Var(
             "support_sliding_window_", relax.ShapeStructInfo([kwargs["support_sliding_window"]])
         )
+        model_type = relax.Var("model_type_", relax.ShapeStructInfo([kwargs["model_type"]]))
 
         try:
             with bb.function(
@@ -220,6 +224,7 @@ class DispatchKVCacheCreation:  # pylint: disable=too-many-instance-attributes
                     prefill_chunk_size,
                     page_size,
                     support_sliding_window,
+                    model_type,
                 ],
             ):
                 cache = kv_cache.FlashInferPagedKVCache(target=self.target, **kwargs)

@@ -120,10 +120,29 @@ class LlamaFFN(nn.Module):
             bias=False,
         )
         self.down_proj = nn.Linear(self.intermediate_size, config.hidden_size, bias=False)
+        self.interleave = config.kwargs.get("interleave_gate_up", False)
+        self.chunk_size = 16
 
     def forward(self, x: Tensor):
         concat_x1_x2 = self.gate_up_proj(x)
-        x1, x2 = op.split(concat_x1_x2, 2, axis=-1)
+        first_dim = concat_x1_x2.shape[0]
+        second_dim = concat_x1_x2.shape[1]
+        if self.interleave:
+            concat_x1_x2_reshape = op.reshape(
+                concat_x1_x2,
+                (
+                    first_dim,
+                    second_dim,
+                    self.intermediate_size // self.chunk_size,
+                    2,
+                    self.chunk_size,
+                ),
+            )
+            x1_, x2_ = op.split(concat_x1_x2_reshape, 2, axis=3)
+            x1 = op.reshape(x1_, (first_dim, second_dim, self.intermediate_size))
+            x2 = op.reshape(x2_, (first_dim, second_dim, self.intermediate_size))
+        else:
+            x1, x2 = op.split(concat_x1_x2, 2, axis=-1)
         return self.down_proj(op.silu(x1) * x2)
 
 

@@ -34,6 +34,7 @@ def huggingface(model_config: LlamaConfig, quantization: Quantization) -> Extern
     model = LlamaForCausalLM(model_config)
     if quantization is not None:
         model.to(quantization.model_dtype)
+    interleave_gate_up = model_config.kwargs.get("interleave_gate_up", False)
     _, _named_params, _ = model.export_tvm(  # type: ignore[misc]
         spec=model.get_default_spec(),
         allow_extern=True,
@@ -59,6 +60,27 @@ def huggingface(model_config: LlamaConfig, quantization: Quantization) -> Extern
                 dtype=mlc_param.dtype,
             ),
         )
+
+        # map mlp weight
+        def interleave_gate_up_weights(interleave=True, chunk_size=16):
+            def func(gate_weight, up_weight, dtype):
+                intermediate_size = gate_weight.shape[0]
+                combined_weight = np.concatenate([gate_weight, up_weight], axis=0)
+                if interleave:
+                    new_order_indices = np.stack(
+                        (
+                            np.arange(intermediate_size).reshape(-1, chunk_size),
+                            np.arange(intermediate_size, intermediate_size * 2).reshape(
+                                -1, chunk_size
+                            ),
+                        ),
+                        axis=1,
+                    ).reshape(-1)
+                    combined_weight = combined_weight[new_order_indices, :]
+                return combined_weight.astype(dtype)
+
+            return func
+
         # Add gates in MLP
         mlp = f"model.layers.{i}.mlp"
         mlc_name = f"{mlp}.gate_up_proj.weight"
@@ -70,7 +92,7 @@ def huggingface(model_config: LlamaConfig, quantization: Quantization) -> Extern
                 f"{mlp}.up_proj.weight",
             ],
             functools.partial(
-                lambda gate, up, dtype: np.concatenate([gate, up], axis=0).astype(dtype),
+                interleave_gate_up_weights(interleave=interleave_gate_up),
                 dtype=mlc_param.dtype,
             ),
         )

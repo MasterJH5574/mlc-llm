@@ -42,7 +42,7 @@ def huggingface(model_config: Qwen3Config, quantization: Quantization) -> Extern
                 "The input Qwen3 model is not fp8 block quantized. "
                 "Thus BlockScaleQuantize is not supported."
             )
-    interleave_gate_up = model_config.kwargs.get("interleave_gate_up", False)     
+    interleave_gate_up = model_config.kwargs.get("interleave_gate_up", False)
     _, _named_params, _ = model.export_tvm(  # type: ignore[misc]
         spec=model.get_default_spec(),
         allow_extern=True,
@@ -111,6 +111,7 @@ def huggingface(model_config: Qwen3Config, quantization: Quantization) -> Extern
                     dtype=mlc_param.dtype,
                 ),
             )
+
         # map mlp weight
         def interleave_gate_up_weights(interleave=True, chunk_size=16):
             def func(gate_weight, up_weight, dtype):
@@ -120,14 +121,17 @@ def huggingface(model_config: Qwen3Config, quantization: Quantization) -> Extern
                     new_order_indices = np.stack(
                         (
                             np.arange(intermediate_size).reshape(-1, chunk_size),
-                            np.arange(intermediate_size, intermediate_size * 2).reshape(-1, chunk_size)
+                            np.arange(intermediate_size, intermediate_size * 2).reshape(
+                                -1, chunk_size
+                            ),
                         ),
-                        axis=1
+                        axis=1,
                     ).reshape(-1)
                     combined_weight = combined_weight[new_order_indices, :]
                 return combined_weight.astype(dtype)
+
             return func
-        
+
         mlp = f"model.layers.{i}.mlp"
         add_weight_and_scale_mapping(
             f"{mlp}.gate_up_proj.weight",

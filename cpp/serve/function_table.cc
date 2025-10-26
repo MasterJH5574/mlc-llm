@@ -161,8 +161,8 @@ void FunctionTable::LoadMegaLib(const std::string& mega_lib_path) {
   if (num_workers > 1) {
     this->disco_mega_mod = sess->CallPacked(sess->GetGlobalFunc("runtime.disco.load_vm_module"),
                                             mega_lib_path, Optional<Device>(std::nullopt));
-    this->mega_mod_get_func = [this, fmodule_get_function =
-                                         sess->GetGlobalFunc("ffi.ModuleGetFunction")](
+    this->mega_mod_get_func = [this,
+                               fmodule_get_function = sess->GetGlobalFunc("ffi.ModuleGetFunction")](
                                   const std::string& name) -> Function {
       DRef func = sess->CallPacked(fmodule_get_function, this->disco_mega_mod, name, true);
       bool exists = (func->DebugGetFromRemote(0).as<Function>()) != nullptr;
@@ -178,10 +178,12 @@ void FunctionTable::LoadMegaLib(const std::string& mega_lib_path) {
     fload_exec = executable.value()->GetFunction("vm_load_executable");
     ICHECK(fload_exec.defined()) << "TVM runtime cannot find vm_load_executable";
     this->local_mega_vm = fload_exec.value()().cast<Module>();
-    this->local_mega_vm.value()->GetFunction("vm_initialization").value()(
-        static_cast<int>(local_gpu_device.device_type), local_gpu_device.device_id,
-        static_cast<int>(tvm::runtime::memory::AllocatorType::kPooled), static_cast<int>(kDLCPU), 0,
-        static_cast<int>(tvm::runtime::memory::AllocatorType::kPooled));
+    this->local_mega_vm.value()
+        ->GetFunction("vm_initialization")
+        .value()(static_cast<int>(local_gpu_device.device_type), local_gpu_device.device_id,
+                 static_cast<int>(tvm::runtime::memory::AllocatorType::kPooled),
+                 static_cast<int>(kDLCPU), 0,
+                 static_cast<int>(tvm::runtime::memory::AllocatorType::kPooled));
     this->mega_mod_get_func = [this](const std::string& name) -> Function {
       return this->local_mega_vm.value()->GetFunction(name, true).value_or(Function(nullptr));
     };
@@ -381,6 +383,9 @@ ObjectRef FunctionTable::CopyToWorker0(const Tensor& host_array, String buffer_c
     buffer = buffer.CreateView(host_array.Shape(), host_array->dtype);
     DLTensor copy_dst = *(buffer.operator->());
     Tensor::CopyFromTo(host_array.operator->(), &copy_dst);
+    // NOTE: need to reset this->cached_buffers since the updates in
+    // local cached_buffers are not reflected in this->cached_buffers.
+    this->cached_buffers = cached_buffers;
     return buffer;
   }
 }

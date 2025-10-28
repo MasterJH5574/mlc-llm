@@ -240,10 +240,8 @@ class NewRequestPrefillActionObj : public BatchPrefillBaseActionObj {
         rsentry_activated.push_back(true);
       }
     }
-    Tensor renormalized_probs = sampler_->BatchRenormalizeProbsByTopP(
-        probs_on_device, sample_indices, request_ids, generation_cfg);
-    std::vector<SampleResult> sample_results = sampler_->BatchSampleTokensWithProbAfterTopP(
-        renormalized_probs, sample_indices, request_ids, generation_cfg, rngs);
+    std::vector<SampleResult> sample_results = sampler_->BatchSampleTokensWithProbBeforeTopP(
+        probs_on_device, sample_indices, request_ids, generation_cfg, rngs);
     ICHECK_EQ(sample_results.size(), rsentries_for_sample.size());
 
     // - Update the committed tokens of states.

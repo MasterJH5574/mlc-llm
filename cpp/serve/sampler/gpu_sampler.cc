@@ -18,7 +18,7 @@ namespace serve {
 inline bool FlashInferSamplingAvailable(Device device) {
   // Device must be CUDA, and FlashInfer must be enabled.
   if (device.device_type != DLDeviceType::kDLCUDA ||
-      !Function::GetGlobal("flashinfer.sampling.parallel_sampling_from_prob").has_value()) {
+      !Function::GetGlobal("flashinfer.top_p_sampling_from_prob").has_value()) {
     return false;
   }
   // Compute version must be at least 8.0
@@ -67,7 +67,9 @@ class GPUSampler : public SamplerObj {
     ICHECK(gpu_sampler_take_probs_func_.defined());
 
     flashinfer_multinomial_sample_func_ =
-        Function::GetGlobal("flashinfer.sampling.parallel_sampling_from_prob");
+        Function::GetGlobal("flashinfer.top_p_sampling_from_prob");
+    flashinfer_get_seed_and_offset_func_ =
+        Function::GetGlobal("flashinfer.random.get_seed_and_offset");
 
     Device preferred_host_device = GetPreferredHostDevice(device);
     // We support at most 5 top prob results for each sequence.
@@ -571,25 +573,37 @@ class GPUSampler : public SamplerObj {
     Tensor top_prob_probs_device{nullptr};
     Tensor top_prob_indices_device{nullptr};
 
-    if (!need_top_p && !need_prob_values) {
-      // - Short path: If top_p and prob values are not needed, we directly sample from multinomial.
-      SyncCopyStream(device_, compute_stream_, copy_stream_);
-      if (flashinfer_sampling_available_) {
-        sampled_token_ids_device =
-            sampled_token_ids_device_.CreateView({sample_indices_device->shape[0]}, dtype_i32_);
-        flashinfer_multinomial_sample_func_.value()(probs_on_device, uniform_samples_device,
-                                                    sample_indices_device,
-                                                    sampled_token_ids_device);
-      } else {
-        sampled_token_ids_device =
-            gpu_multinomial_from_uniform_func_(probs_on_device, uniform_samples_device,
-                                               sample_indices_device)
-                .cast<Tensor>();
-      }
+    if (need_top_p && flashinfer_sampling_available_) {
+      Tensor top_p_host = top_p_host_.CreateView({num_probs}, dtype_f32_);
+      Tensor top_p_device = top_p_device_.CreateView({num_probs}, dtype_f32_);
+      CopyArray(/*src=*/top_p_host, /*dst=*/top_p_device, copy_stream_);
+      sampled_token_ids_device =
+          sampled_token_ids_device_.CreateView({sample_indices_device->shape[0]}, dtype_i32_);
+      ffi::Array<ffi::Any> seed_and_offset =
+          flashinfer_get_seed_and_offset_func_.value()(32 * probs_on_device->shape[0])
+              .cast<ffi::Array<ffi::Any>>();
+      CHECK_EQ(seed_and_offset.size(), 2);
+      int64_t seed = seed_and_offset[0].cast<int64_t>();
+      int64_t offset = seed_and_offset[1].cast<int64_t>();
+      flashinfer_multinomial_sample_func_.value()(probs_on_device, sampled_token_ids_device,
+                                                  top_p_device, seed, offset,
+                                                  reinterpret_cast<uint64_t>(compute_stream_));
       return {sampled_token_ids_device, sampled_probs_device, top_prob_probs_device,
               top_prob_indices_device};
     }
 
+    if (!need_top_p && !need_prob_values) {
+      // - Short path: If top_p and prob values are not needed, we directly sample from multinomial.
+      SyncCopyStream(device_, compute_stream_, copy_stream_);
+      sampled_token_ids_device = gpu_multinomial_from_uniform_func_(
+                                     probs_on_device, uniform_samples_device, sample_indices_device)
+                                     .cast<Tensor>();
+      return {sampled_token_ids_device, sampled_probs_device, top_prob_probs_device,
+              top_prob_indices_device};
+    }
+
+    LOG(FATAL) << "cannot reach here, need_top_p: " << need_top_p
+               << ", flashinfer_sampling_available_: " << flashinfer_sampling_available_;
     // - Argsort the probability.
     Array<Tensor> argsort_results = gpu_argsort_probs_func_(probs_on_device).cast<Array<Tensor>>();
     ICHECK_EQ(argsort_results.size(), 2);
@@ -620,19 +634,9 @@ class GPUSampler : public SamplerObj {
               .cast<Tensor>();
     } else {
       // - Sample without top_p.
-      if (flashinfer_sampling_available_) {
-        sampled_token_ids_device =
-            sampled_token_ids_device_.CreateView({sample_indices_device->shape[0]}, dtype_i32_);
-        flashinfer_multinomial_sample_func_
-            .value()(probs_on_device, uniform_samples_device, sample_indices_device,
-                     sampled_token_ids_device)
-            .cast<Tensor>();
-      } else {
-        sampled_token_ids_device =
-            gpu_multinomial_from_uniform_func_(probs_on_device, uniform_samples_device,
-                                               sample_indices_device)
-                .cast<Tensor>();
-      }
+      sampled_token_ids_device = gpu_multinomial_from_uniform_func_(
+                                     probs_on_device, uniform_samples_device, sample_indices_device)
+                                     .cast<Tensor>();
     }
 
     if (need_prob_values) {
@@ -708,6 +712,7 @@ class GPUSampler : public SamplerObj {
   Function gpu_verify_draft_tokens_func_;
   Function gpu_renormalize_by_top_p_func_;
   Optional<Function> flashinfer_multinomial_sample_func_;
+  Optional<Function> flashinfer_get_seed_and_offset_func_;
   // Auxiliary Tensors on CPU
   Tensor uniform_samples_host_;
   Tensor sample_indices_host_;

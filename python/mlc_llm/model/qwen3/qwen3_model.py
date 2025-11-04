@@ -189,7 +189,16 @@ class Qwen3MLP(nn.Module):
         first_dim = concat_x1_x2.shape[0]
         second_dim = concat_x1_x2.shape[1]
         if self.interleave:
-            concat_x1_x2_reshape = op.reshape(concat_x1_x2, (first_dim, second_dim, self.intermediate_size // self.chunk_size, 2, self.chunk_size))
+            concat_x1_x2_reshape = op.reshape(
+                concat_x1_x2,
+                (
+                    first_dim,
+                    second_dim,
+                    self.intermediate_size // self.chunk_size,
+                    2,
+                    self.chunk_size,
+                ),
+            )
             x1_, x2_ = op.split(concat_x1_x2_reshape, 2, axis=3)
             x1 = op.reshape(x1_, (first_dim, second_dim, self.intermediate_size))
             x2 = op.reshape(x2_, (first_dim, second_dim, self.intermediate_size))
@@ -206,6 +215,7 @@ class Qwen3DecoderLayer(nn.Module):
         self.post_attention_layernorm = nn.RMSNorm(
             config.hidden_size, -1, config.rms_norm_eps, bias=False
         )
+        self.interleave = config.kwargs.get("interleave_gate_up", False)
 
         def _set_tp():
             def _set(layer, hint):
@@ -227,7 +237,10 @@ class Qwen3DecoderLayer(nn.Module):
                 )
             _set(self.self_attn.o_proj.weight, tp.ShardSingleDim("_shard_o", dim=1))
             _set(
-                self.mlp.gate_up_proj.weight, tp.ShardSingleDim("_shard_mlp_up", segs=[i, i], dim=0)
+                self.mlp.gate_up_proj.weight,
+                tp.ShardSingleDim(
+                    "_shard_mlp_up", segs=[i, i] if not self.interleave else None, dim=0
+                ),
             )
             _set(self.mlp.down_proj.weight, tp.ShardSingleDim("_shard_mlp_down", dim=1))
 
@@ -270,7 +283,9 @@ class Qwen3LMHeadModel(nn.Module):  # pylint: disable=too-many-instance-attribut
         self.model = Qwen3Model(config)
         self.tie_word_embeddings = config.tie_word_embeddings
         if not config.tie_word_embeddings:
-            self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+            self.lm_head = nn.Linear(
+                config.hidden_size, config.vocab_size // config.tensor_parallel_shards, bias=False
+            )
         self.dtype = config.dtype
         self.hidden_size = config.hidden_size
         self.num_hidden_layers = config.num_hidden_layers
@@ -283,6 +298,15 @@ class Qwen3LMHeadModel(nn.Module):  # pylint: disable=too-many-instance-attribut
         self.tensor_parallel_shards = config.tensor_parallel_shards
         self.head_dim = config.head_dim
         self.weight_block_size = config.weight_block_size
+
+        def _set_tp_lm_head():
+            if not self.tie_word_embeddings:
+                self.lm_head.weight.attrs["shard_strategy"] = tp.ShardSingleDim(
+                    "_shard_lm_head_weight",
+                    dim=0,
+                )
+
+        _set_tp_lm_head()
 
     def to(self, dtype: Optional[str] = None):
         super().to(dtype=dtype)
@@ -306,6 +330,15 @@ class Qwen3LMHeadModel(nn.Module):  # pylint: disable=too-many-instance-attribut
         else:
             logits = self.lm_head(hidden_states)
         if logits.dtype != "float32":
+            if self.tensor_parallel_shards > 1:
+                logits_shape = logits.shape
+                logits_flatten = op.reshape(logits, (-1, logits_shape[-1]))
+                logits_allgather = op.ccl_allgather(
+                    logits_flatten, num_workers=self.tensor_parallel_shards
+                ).reshape(self.tensor_parallel_shards, logits_flatten.shape[0], -1)
+                logits = op.permute_dims(logits_allgather, (1, 0, 2)).reshape(
+                    *logits_shape[:-1], -1
+                )
             logits = logits.astype("float32")
         return logits
 
@@ -328,6 +361,15 @@ class Qwen3LMHeadModel(nn.Module):  # pylint: disable=too-many-instance-attribut
         else:
             logits = self.lm_head(hidden_states)
         if logits.dtype != "float32":
+            if self.tensor_parallel_shards > 1:
+                logits_shape = logits.shape
+                logits_flatten = op.reshape(logits, (-1, logits_shape[-1]))
+                logits_allgather = op.ccl_allgather(
+                    logits_flatten, num_workers=self.tensor_parallel_shards
+                ).reshape(self.tensor_parallel_shards, logits_flatten.shape[0], -1)
+                logits = op.permute_dims(logits_allgather, (1, 0, 2)).reshape(
+                    *logits_shape[:-1], -1
+                )
             logits = logits.astype("float32")
         return logits, paged_kv_cache
 
@@ -340,6 +382,15 @@ class Qwen3LMHeadModel(nn.Module):  # pylint: disable=too-many-instance-attribut
         else:
             logits = self.lm_head(hidden_states)
         if logits.dtype != "float32":
+            if self.tensor_parallel_shards > 1:
+                logits_shape = logits.shape
+                logits_flatten = op.reshape(logits, (-1, logits_shape[-1]))
+                logits_allgather = op.ccl_allgather(
+                    logits_flatten, num_workers=self.tensor_parallel_shards
+                ).reshape(self.tensor_parallel_shards, logits_flatten.shape[0], -1)
+                logits = op.permute_dims(logits_allgather, (1, 0, 2)).reshape(
+                    *logits_shape[:-1], -1
+                )
             logits = logits.astype("float32")
         return logits, paged_kv_cache
 

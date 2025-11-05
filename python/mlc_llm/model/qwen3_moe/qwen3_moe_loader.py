@@ -42,7 +42,8 @@ def huggingface(model_config: Qwen3MoeConfig, quantization: Quantization) -> Ext
                 "The input Qwen3 model is not fp8 block quantized. "
                 "Thus BlockScaleQuantize is not supported."
             )
-
+            
+    interleave_gate_up = model_config.kwargs.get("interleave_gate_up", False)     
     _, _named_params, _ = model.export_tvm(  # type: ignore[misc]
         spec=model.get_default_spec(),
         allow_extern=True,
@@ -120,6 +121,24 @@ def huggingface(model_config: Qwen3MoeConfig, quantization: Quantization) -> Ext
                 stack.append(np.concatenate([hf_params[i], hf_params[i + 1]], axis=0))
             return np.stack(stack, axis=0).astype(dtype)
 
+        def interleave_gate_up_weights(interleave=True, chunk_size=16):
+            print(f"interleave: {interleave}, chunk_size: {chunk_size}", flush=True)
+            def func(*hf_params, dtype):
+                intermediate_size = hf_params[0].shape[0]
+                combined_weight = combine_expert_gate_up(*hf_params, dtype=dtype)
+                if interleave:
+                    new_order_indices = np.stack(
+                        (
+                            np.arange(intermediate_size).reshape(-1, chunk_size),
+                            np.arange(intermediate_size, intermediate_size * 2).reshape(-1, chunk_size),
+                        ),
+                        axis=1,
+                    ).reshape(-1)
+                    combined_weight = combined_weight[:, new_order_indices, :]
+                return combined_weight.astype(dtype)
+
+            return func
+
         add_weight_and_scale_mapping(
             f"{mlp}.moe_gate_up_proj.weight",
             functools.reduce(
@@ -132,7 +151,7 @@ def huggingface(model_config: Qwen3MoeConfig, quantization: Quantization) -> Ext
                     for expert_id in range(model_config.num_experts)
                 ],
             ),
-            combine_expert_gate_up,
+            interleave_gate_up_weights(interleave=interleave_gate_up),
         )
 
         # map mlp moe down projection weight

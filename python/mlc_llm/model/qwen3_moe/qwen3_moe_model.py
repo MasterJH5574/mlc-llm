@@ -84,11 +84,23 @@ class Qwen3MoeSparseMoeBlock(nn.Module):  # pylint: disable=too-many-instance-at
         )
         self.act_fn = ACT2FN[config.hidden_act]
         self.dtype = "float32"
+        self.interleave = config.kwargs.get("interleave_gate_up", False)
+        self.chunk_size = 16
 
     def forward(self, x: Tensor):
         def _expert_forward(x: Tensor, indptr: Tensor):
             x1_x2 = self.moe_gate_up_proj(x, indptr)
-            x1, x2 = op.split(x1_x2, indices_or_sections=2, axis=-1)
+            if self.interleave:
+                first_dim = x1_x2.shape[0]
+                concat_x1_x2_reshape = op.reshape(
+                    x1_x2,
+                    (first_dim, self.moe_intermediate_size // self.chunk_size, 2, self.chunk_size),
+                )
+                x1_, x2_ = op.split(concat_x1_x2_reshape, 2, axis=2)
+                x1 = op.reshape(x1_, (first_dim, self.moe_intermediate_size))
+                x2 = op.reshape(x2_, (first_dim, self.moe_intermediate_size))
+            else:
+                x1, x2 = op.split(x1_x2, indices_or_sections=2, axis=-1)
             x = self.moe_down_proj(self.act_fn(x1) * x2, indptr)
             return x
 

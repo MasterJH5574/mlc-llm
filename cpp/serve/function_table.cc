@@ -363,6 +363,7 @@ ObjectRef FunctionTable::CopyToWorker0(const Tensor& host_array, String buffer_c
     Shape real_shape = host_array.Shape();
     DRef buffer_view = nd_view_func_(buffer.value(), real_shape).cast<DRef>();
     sess->CopyToWorker0(host_array, buffer_view);
+    this->cached_buffers = cached_buffers;
     return buffer_view;
   } else {
     auto it = cached_buffers.find(buffer_cache_key);
